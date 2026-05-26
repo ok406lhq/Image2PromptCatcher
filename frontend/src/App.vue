@@ -88,7 +88,8 @@ const previewIndex = ref(0)
 
 const fetchArticle = async () => {
   try {
-    const response = await axios.get('/data/article.json')
+    const dataUrl = `${import.meta.env.BASE_URL}data/article.json`
+    const response = await axios.get(dataUrl)
     article.value = response.data
   } catch (error) {
     console.error('Failed to fetch article:', error)
