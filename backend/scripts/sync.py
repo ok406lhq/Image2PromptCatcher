@@ -13,7 +13,8 @@ import sys
 
 GITHUB_URL = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-gpt-image-2/main/README_zh.md"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-gpt-image-2/main/"
-DATA_DIR = Path("/workspace/frontend/public/data")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = PROJECT_ROOT / "frontend" / "public" / "data"
 ARTICLE_FILE = DATA_DIR / "article.json"
 
 def clean_text(text: str) -> str:
