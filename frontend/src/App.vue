@@ -32,13 +32,24 @@
           </div>
           <div class="body">
             <h2>{{ item.title }}</h2>
-            <p class="desc">{{ item.description }}</p>
+            <p class="desc" :title="item.description">{{ item.description }}</p>
             <div class="prompt-block">
               <div class="prompt-head">
                 <p class="prompt-label">提示词</p>
-                <button class="copy-btn" type="button" @click="copyPrompt(item.prompt, index)">
-                  {{ copiedIndex === index ? '已复制' : '复制' }}
-                </button>
+                <div class="actions">
+                  <a
+                    v-if="item.xUrl"
+                    class="x-link"
+                    :href="item.xUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    via X
+                  </a>
+                  <button class="copy-btn" type="button" @click="copyPrompt(item.prompt, index)">
+                    {{ copiedIndex === index ? '已复制' : '复制' }}
+                  </button>
+                </div>
               </div>
               <p class="prompt-text">{{ normalizePrompt(item.prompt) }}</p>
             </div>
@@ -70,6 +81,7 @@ interface ArticleBlock {
   description: string
   prompt: string
   image: string
+  xUrl?: string
 }
 
 interface Article {
@@ -294,6 +306,11 @@ h2 {
   line-height: 1.65;
   white-space: normal;
   word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .prompt-block {
@@ -317,6 +334,22 @@ h2 {
   justify-content: space-between;
 }
 
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.x-link {
+  border: 1px solid #d8b496;
+  background: linear-gradient(135deg, #fff, #fbeee1);
+  color: #7c4624;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font: 600 12px/1.2 'Trebuchet MS', sans-serif;
+  text-decoration: none;
+}
+
 .copy-btn {
   border: 1px solid #e5c4a6;
   background: #fff;
@@ -335,8 +368,8 @@ h2 {
   font-size: 0.93rem;
   white-space: normal;
   display: -webkit-box;
-  -webkit-line-clamp: 4;
-  line-clamp: 4;
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
   -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;

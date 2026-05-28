@@ -40,6 +40,7 @@ def parse_markdown(markdown_content: str) -> dict:
     current_description = ""
     in_prompt_block = False
     prompt_lines = []
+    current_x_url = ""
 
     for raw_line in lines:
         line = raw_line.strip()
@@ -54,7 +55,14 @@ def parse_markdown(markdown_content: str) -> dict:
                 current_title = current_heading
                 current_description = ""
                 last_prompt = ""
+                current_x_url = ""
             context_buffer = []
+            continue
+
+        if line.startswith("- **来源:**"):
+            source_match = re.search(r"\((https?://[^)\s]+)\)", line)
+            if source_match:
+                current_x_url = source_match.group(1)
             continue
 
         if line.startswith("```"):
@@ -110,6 +118,7 @@ def parse_markdown(markdown_content: str) -> dict:
                     "description": description,
                     "prompt": last_prompt,
                     "image": image_url,
+                    "xUrl": current_x_url,
                 }
             )
             continue
@@ -130,6 +139,7 @@ def parse_markdown(markdown_content: str) -> dict:
                     "description": description,
                     "prompt": last_prompt,
                     "image": image_url,
+                    "xUrl": current_x_url,
                 }
             )
             continue
