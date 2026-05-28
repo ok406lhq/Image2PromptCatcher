@@ -3,6 +3,10 @@ name: Deploy Frontend To Pages
 on:
   push:
     branches: ["master", "main"]
+  workflow_run:
+    workflows: ["Sync GitHub Document"]
+    types: [completed]
+    branches: ["master", "main"]
   workflow_dispatch:
 
 permissions:
@@ -16,6 +20,7 @@ concurrency:
 
 jobs:
   build:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
