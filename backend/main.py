@@ -56,6 +56,7 @@ def parse_markdown(markdown_content: str) -> dict:
     in_prompt_block = False
     prompt_lines: list[str] = []
     current_x_url = ""
+    current_block_indexes: list[int] = []
 
     for raw_line in lines:
         line = raw_line.strip()
@@ -71,6 +72,7 @@ def parse_markdown(markdown_content: str) -> dict:
                 current_description = ""
                 last_prompt = ""
                 current_x_url = ""
+                current_block_indexes = []
             context_buffer = []
             continue
 
@@ -78,6 +80,9 @@ def parse_markdown(markdown_content: str) -> dict:
             source_match = re.search(r"\((https?://[^)\s]+)\)", line)
             if source_match:
                 current_x_url = source_match.group(1)
+                for idx in current_block_indexes:
+                    if 0 <= idx < len(blocks):
+                        blocks[idx]["xUrl"] = current_x_url
             continue
 
         if line.startswith("```"):
@@ -137,6 +142,7 @@ def parse_markdown(markdown_content: str) -> dict:
                     "xUrl": current_x_url,
                 }
             )
+            current_block_indexes.append(len(blocks) - 1)
             continue
 
         html_img_match = html_image_pattern.search(line)
@@ -158,6 +164,7 @@ def parse_markdown(markdown_content: str) -> dict:
                     "xUrl": current_x_url,
                 }
             )
+            current_block_indexes.append(len(blocks) - 1)
             continue
 
         if line.startswith("#"):
