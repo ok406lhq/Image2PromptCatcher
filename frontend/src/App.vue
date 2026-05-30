@@ -48,7 +48,12 @@
           </div>
           <div class="body">
             <h2>{{ item.title }}</h2>
-            <p class="desc" :title="item.description">{{ item.description }}</p>
+            <div class="desc-row">
+              <p class="desc" :title="item.description">{{ item.description }}</p>
+              <button class="copy-desc-btn" type="button" @click="copyDescription(item.description, index)">
+                {{ copiedDescIndex === index ? '已复制描述' : '复制描述' }}
+              </button>
+            </div>
             <div class="prompt-block">
               <div class="prompt-head">
                 <p class="prompt-label">提示词 <span v-if="item.publishedAt" class="published-at">{{ item.publishedAt }}</span></p>
@@ -68,6 +73,10 @@
                 </div>
               </div>
               <p class="prompt-text">{{ normalizePrompt(item.prompt) }}</p>
+              <div class="meta-row">
+                <span v-if="item.author">作者：{{ item.author }}</span>
+                <span v-if="item.language">语言：{{ item.language }}</span>
+              </div>
             </div>
           </div>
         </article>
@@ -99,6 +108,8 @@ interface ArticleBlock {
   image: string
   xUrl?: string
   publishedAt?: string
+  author?: string
+  language?: string
 }
 
 interface Article {
@@ -126,6 +137,7 @@ interface Article {
 
 const article = ref<Article | null>(null)
 const copiedIndex = ref<number | null>(null)
+const copiedDescIndex = ref<number | null>(null)
 const previewOpen = ref(false)
 const previewTitle = ref('')
 const previewIndex = ref(0)
@@ -165,6 +177,14 @@ const copyPrompt = async (prompt: string, index: number) => {
   copiedIndex.value = index
   window.setTimeout(() => {
     if (copiedIndex.value === index) copiedIndex.value = null
+  }, 1200)
+}
+
+const copyDescription = async (description: string, index: number) => {
+  await navigator.clipboard.writeText(description || '')
+  copiedDescIndex.value = index
+  window.setTimeout(() => {
+    if (copiedDescIndex.value === index) copiedDescIndex.value = null
   }, 1200)
 }
 
@@ -435,6 +455,22 @@ h2 {
   overflow: hidden;
 }
 
+.desc-row {
+  display: grid;
+  gap: 8px;
+}
+
+.copy-desc-btn {
+  width: fit-content;
+  border: 1px solid #e5c4a6;
+  background: #fff;
+  color: #8b4b21;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font: 600 12px/1.2 'Trebuchet MS', sans-serif;
+  cursor: pointer;
+}
+
 .prompt-block {
   margin-top: 14px;
   border-radius: 12px;
@@ -502,6 +538,22 @@ h2 {
   -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.meta-row {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.meta-row span {
+  border: 1px solid #efd4be;
+  background: #fff;
+  color: #8a5633;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font: 600 12px/1.2 'Trebuchet MS', sans-serif;
 }
 
 .lightbox {

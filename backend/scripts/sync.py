@@ -78,6 +78,8 @@ def parse_markdown(markdown_content: str) -> dict:
     current_x_url = ""
     current_block_indexes = []
     current_published_at = ""
+    current_author = ""
+    current_language = ""
 
     for raw_line in lines:
         line = raw_line.strip()
@@ -95,6 +97,8 @@ def parse_markdown(markdown_content: str) -> dict:
                 current_x_url = ""
                 current_block_indexes = []
                 current_published_at = ""
+                current_author = ""
+                current_language = ""
             context_buffer = []
             continue
 
@@ -114,6 +118,24 @@ def parse_markdown(markdown_content: str) -> dict:
                 for idx in current_block_indexes:
                     if 0 <= idx < len(blocks):
                         blocks[idx]["publishedAt"] = current_published_at
+            continue
+
+        if line.startswith("- **作者:**"):
+            author_match = re.search(r"- \*\*作者:\*\*\s*(.+)$", line)
+            if author_match:
+                current_author = clean_text(author_match.group(1))
+                for idx in current_block_indexes:
+                    if 0 <= idx < len(blocks):
+                        blocks[idx]["author"] = current_author
+            continue
+
+        if line.startswith("- **多语言:**"):
+            lang_match = re.search(r"- \*\*多语言:\*\*\s*(.+)$", line)
+            if lang_match:
+                current_language = clean_text(lang_match.group(1))
+                for idx in current_block_indexes:
+                    if 0 <= idx < len(blocks):
+                        blocks[idx]["language"] = current_language
             continue
 
         if line.startswith("```"):
@@ -171,6 +193,8 @@ def parse_markdown(markdown_content: str) -> dict:
                     "image": image_url,
                     "xUrl": current_x_url,
                     "publishedAt": current_published_at,
+                    "author": current_author,
+                    "language": current_language,
                 }
             )
             current_block_indexes.append(len(blocks) - 1)
@@ -194,6 +218,8 @@ def parse_markdown(markdown_content: str) -> dict:
                     "image": image_url,
                     "xUrl": current_x_url,
                     "publishedAt": current_published_at,
+                    "author": current_author,
+                    "language": current_language,
                 }
             )
             current_block_indexes.append(len(blocks) - 1)
