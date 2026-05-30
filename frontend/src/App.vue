@@ -8,17 +8,33 @@
         <span>更新于 {{ formatUpdateTime(article?.updateAt) }}</span>
         <span>每天 09:00 / 23:00 自动抓取</span>
       </div>
+      <div class="history-panel" v-if="article?.recentHistory?.length">
+        <button class="history-main-link" type="button" @click="selectVersion('latest')">最近历史更新</button>
+        <div class="history-list">
+          <button
+            v-for="item in article.recentHistory"
+            :key="item.sha"
+            class="history-btn"
+            type="button"
+            @click="selectVersion(item.sha)"
+            :class="{ active: activeVersionKey === item.sha }"
+            :title="`${item.message} (${formatUpdateTime(item.date)})`"
+          >
+            {{ historyButtonLabel(item.sha) }}
+          </button>
+        </div>
+      </div>
     </header>
 
     <main>
       <div v-if="!article" class="loading">正在加载今日图文内容...</div>
 
-      <section v-else class="feed">
+      <section v-else :class="['feed', { refreshing: isRefreshing }]">
         <article
-          v-for="(item, index) in article.blocks"
+          v-for="(item, index) in visibleBlocks"
           :key="`${item.image}-${index}`"
           class="card"
-          :style="{ animationDelay: `${index * 50}ms` }"
+          :style="cardAnimStyle(index)"
         >
           <div class="thumb-wrap">
             <img
@@ -35,7 +51,7 @@
             <p class="desc" :title="item.description">{{ item.description }}</p>
             <div class="prompt-block">
               <div class="prompt-head">
-                <p class="prompt-label">提示词</p>
+                <p class="prompt-label">提示词 <span v-if="item.publishedAt" class="published-at">{{ item.publishedAt }}</span></p>
                 <div class="actions">
                   <a
                     v-if="item.xUrl"
@@ -82,6 +98,7 @@ interface ArticleBlock {
   prompt: string
   image: string
   xUrl?: string
+  publishedAt?: string
 }
 
 interface Article {
@@ -90,6 +107,21 @@ interface Article {
   blocks: ArticleBlock[]
   updateAt: string
   source: string
+  historyPage?: string
+  recentHistory?: {
+    sha: string
+    message: string
+    date: string
+    url: string
+  }[]
+  historyVersions?: {
+    sha: string
+    message: string
+    date: string
+    title: string
+    intro: string
+    blocks: ArticleBlock[]
+  }[]
 }
 
 const article = ref<Article | null>(null)
@@ -97,6 +129,8 @@ const copiedIndex = ref<number | null>(null)
 const previewOpen = ref(false)
 const previewTitle = ref('')
 const previewIndex = ref(0)
+const activeVersionKey = ref('latest')
+const isRefreshing = ref(false)
 
 const fetchArticle = async () => {
   try {
@@ -136,12 +170,53 @@ const copyPrompt = async (prompt: string, index: number) => {
 
 const galleryByTitle = computed(() => {
   const map: Record<string, string[]> = {}
-  for (const item of article.value?.blocks || []) {
+  for (const item of visibleBlocks.value || []) {
     if (!map[item.title]) map[item.title] = []
     map[item.title].push(item.image)
   }
   return map
 })
+
+const visibleBlocks = computed(() => {
+  if (!article.value) return []
+  if (activeVersionKey.value === 'latest') return article.value.blocks
+  const target = article.value.historyVersions?.find((v) => v.sha === activeVersionKey.value)
+  return target?.blocks || article.value.blocks
+})
+
+const selectVersion = (key: string) => {
+  isRefreshing.value = true
+  activeVersionKey.value = key
+  window.setTimeout(() => {
+    isRefreshing.value = false
+  }, 420)
+}
+
+const historyLabels = computed(() => {
+  const labels: Record<string, string> = {}
+  const counters: Record<string, number> = {}
+  const records = [...(article.value?.recentHistory || [])]
+  records.reverse()
+
+  for (const item of records) {
+    const date = item.date ? new Date(item.date) : null
+    const ymd = date && !Number.isNaN(date.getTime())
+      ? date.toISOString().slice(0, 10)
+      : 'unknown-date'
+    counters[ymd] = (counters[ymd] || 0) + 1
+    labels[item.sha] = `${ymd}-v${counters[ymd]}`
+  }
+
+  return labels
+})
+
+const historyButtonLabel = (sha: string) => historyLabels.value[sha] || sha
+
+const cardAnimStyle = (index: number) => {
+  const stagger = index * 50
+  const base = isRefreshing.value ? 30 : 0
+  return { animationDelay: `${stagger + base}ms` }
+}
 
 const previewImages = computed(() => galleryByTitle.value[previewTitle.value] || [])
 const currentPreviewImage = computed(() => previewImages.value[previewIndex.value] || '')
@@ -232,6 +307,46 @@ h1 {
   font: 600 13px/1.2 'Trebuchet MS', sans-serif;
 }
 
+.history-panel {
+  margin-top: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.history-main-link {
+  width: fit-content;
+  border: 1px solid #d8b496;
+  background: #fff;
+  color: #7e4a2a;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font: 700 13px/1.2 'Trebuchet MS', sans-serif;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.history-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.history-btn {
+  border: 1px solid #e6c6aa;
+  background: #fff4e6;
+  color: #8d5532;
+  border-radius: 999px;
+  padding: 4px 10px;
+  text-decoration: none;
+  font: 600 12px/1.2 'Trebuchet MS', sans-serif;
+  cursor: pointer;
+}
+
+.history-btn.active {
+  background: #e9c3a1;
+  color: #5a2f16;
+}
+
 .loading {
   text-align: center;
   padding: 80px 24px;
@@ -255,6 +370,13 @@ h1 {
   box-shadow: 0 12px 30px rgba(164, 95, 44, 0.11);
   animation: reveal 0.55s ease both;
   transition: transform 260ms ease, box-shadow 260ms ease;
+}
+
+.feed.refreshing .card {
+  animation-name: refreshReveal;
+  animation-duration: 0.48s;
+  animation-timing-function: ease;
+  animation-fill-mode: both;
 }
 
 .card:hover {
@@ -326,6 +448,13 @@ h2 {
   color: #a25f31;
   font: 700 12px/1.2 'Trebuchet MS', sans-serif;
   letter-spacing: 0.06em;
+}
+
+.published-at {
+  margin-left: 8px;
+  font-weight: 500;
+  color: #9f6c47;
+  font-size: 11px;
 }
 
 .prompt-head {
@@ -444,6 +573,19 @@ h2 {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes refreshReveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+    filter: blur(1px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
   }
 }
 
