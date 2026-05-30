@@ -62,7 +62,8 @@ def parse_markdown(markdown_content: str) -> dict:
     title_match = re.search(r"^#\s+(.+)$", markdown_content, re.MULTILINE)
     title = clean_text(title_match.group(1)) if title_match else "GPT Image 2 图文精选"
 
-    heading_pattern = re.compile(r"^(##+)\s+(.+)$")
+    no_heading_pattern = re.compile(r"^###\s+(No\.\s*\d+:\s+.+)$")
+    image_heading_pattern = re.compile(r"^#####\s+(Image\s+\d+)\s*$", re.IGNORECASE)
     image_pattern = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
     html_image_pattern = re.compile(r'<img[^>]*src="([^"]+)"[^>]*alt="([^"]*)"[^>]*>', re.IGNORECASE)
 
@@ -80,26 +81,31 @@ def parse_markdown(markdown_content: str) -> dict:
     current_published_at = ""
     current_author = ""
     current_language = ""
+    expect_description_text = False
 
     for raw_line in lines:
         line = raw_line.strip()
         if not line:
             continue
 
-        heading_match = heading_pattern.match(line)
-        if heading_match:
-            current_heading = clean_text(heading_match.group(2))
-            current_section = current_heading
-            if current_heading.startswith("No."):
-                current_title = current_heading
-                current_description = ""
-                last_prompt = ""
-                current_x_url = ""
-                current_block_indexes = []
-                current_published_at = ""
-                current_author = ""
-                current_language = ""
+        no_heading_match = no_heading_pattern.match(line)
+        if no_heading_match:
+            current_title = clean_text(no_heading_match.group(1))
+            current_section = current_title
+            current_description = ""
+            last_prompt = ""
+            current_x_url = ""
+            current_block_indexes = []
+            current_published_at = ""
+            current_author = ""
+            current_language = ""
+            expect_description_text = False
             context_buffer = []
+            continue
+
+        image_heading_match = image_heading_pattern.match(line)
+        if image_heading_match:
+            current_section = clean_text(image_heading_match.group(1))
             continue
 
         if line.startswith("- **来源:**"):
@@ -155,9 +161,19 @@ def parse_markdown(markdown_content: str) -> dict:
 
         if line.startswith("####") and "描述" in line:
             current_description = ""
+            expect_description_text = True
             continue
 
         if line.startswith("####") and "提示词" in line:
+            expect_description_text = False
+            continue
+
+        if line.startswith("####"):
+            expect_description_text = False
+
+        if expect_description_text and line and not line.startswith("#") and not line.startswith("!") and not line.startswith("<"):
+            current_description = clean_text(re.sub(r"^[\-*>\s]*", "", line))
+            expect_description_text = False
             continue
 
         if current_description == "" and line and not line.startswith("#") and not line.startswith("!") and not line.startswith("<") and "提示词" not in line:
