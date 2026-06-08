@@ -8,17 +8,33 @@
         <span>更新于 {{ formatUpdateTime(article?.updateAt) }}</span>
         <span>每天 09:00 / 23:00 自动抓取</span>
       </div>
+      <div class="history-panel" v-if="article?.recentHistory?.length">
+        <button class="history-main-link" type="button" @click="selectVersion('latest')">最近历史更新</button>
+        <div class="history-list">
+          <button
+            v-for="item in article.recentHistory"
+            :key="item.sha"
+            class="history-btn"
+            type="button"
+            @click="selectVersion(item.sha)"
+            :class="{ active: activeVersionKey === item.sha }"
+            :title="`${item.message} (${formatUpdateTime(item.date)})`"
+          >
+            {{ historyButtonLabel(item.sha) }}
+          </button>
+        </div>
+      </div>
     </header>
 
     <main>
       <div v-if="!article" class="loading">正在加载今日图文内容...</div>
 
-      <section v-else class="feed">
+      <section v-else :class="['feed', { refreshing: isRefreshing }]">
         <article
-          v-for="(item, index) in article.blocks"
+          v-for="(item, index) in visibleBlocks"
           :key="`${item.image}-${index}`"
           class="card"
-          :style="{ animationDelay: `${index * 50}ms` }"
+          :style="cardAnimStyle(index)"
         >
           <div class="thumb-wrap">
             <img
@@ -32,10 +48,15 @@
           </div>
           <div class="body">
             <h2>{{ item.title }}</h2>
-            <p class="desc" :title="item.description">{{ item.description }}</p>
+            <div class="desc-row">
+              <p class="desc" :title="item.description">{{ item.description }}</p>
+              <button class="copy-desc-btn" type="button" @click="copyDescription(item.description, index)">
+                {{ copiedDescIndex === index ? '已复制描述' : '复制描述' }}
+              </button>
+            </div>
             <div class="prompt-block">
               <div class="prompt-head">
-                <p class="prompt-label">提示词</p>
+                <p class="prompt-label">提示词 <span v-if="item.publishedAt" class="published-at">{{ item.publishedAt }}</span></p>
                 <div class="actions">
                   <a
                     v-if="item.xUrl"
@@ -51,7 +72,11 @@
                   </button>
                 </div>
               </div>
-              <p class="prompt-text">{{ normalizePrompt(item.prompt) }}</p>
+              <p class="prompt-text" @click="openPromptModal(item.prompt, index)">{{ normalizePrompt(item.prompt) }}</p>
+              <div class="meta-row">
+                <span v-if="item.author">作者：{{ item.author }}</span>
+                <span v-if="item.language">语言：{{ item.language }}</span>
+              </div>
             </div>
           </div>
         </article>
@@ -62,17 +87,58 @@
       <a :href="article.source" target="_blank" rel="noopener noreferrer">查看原始仓库文档</a>
     </footer>
 
-    <div v-if="previewOpen" class="lightbox" @click.self="closePreview">
-      <button class="lightbox-close" type="button" @click="closePreview">×</button>
-      <button class="lightbox-arrow left" type="button" @click="showPrevImage" :disabled="!hasPrevImage">←</button>
-      <img class="lightbox-image" :src="currentPreviewImage" alt="预览图" />
-      <button class="lightbox-arrow right" type="button" @click="showNextImage" :disabled="!hasNextImage">→</button>
+    <div v-if="previewOpen" class="lightbox" @click="closePreview" @wheel="handleWheel">
+      <button class="lightbox-close" type="button" @click.stop="closePreview">×</button>
+      <button class="lightbox-arrow left" type="button" @click.stop="showPrevImage" :disabled="!hasPrevImage">←</button>
+      <div class="lightbox-image-wrapper" @mousedown.stop="startDrag" @mousemove.stop="drag" @mouseup.stop="endDrag" @mouseleave.stop="endDrag" @click.stop>
+        <img
+          class="lightbox-image"
+          :src="currentPreviewImage"
+          alt="预览图"
+          :style="imageTransformStyle"
+          @dragstart.prevent
+        />
+      </div>
+      <button class="lightbox-arrow right" type="button" @click.stop="showNextImage" :disabled="!hasNextImage">→</button>
+      <div class="lightbox-controls" @click.stop>
+        <button class="lightbox-zoom-btn" type="button" @click.stop="zoomOut" title="缩小">−</button>
+        <span class="lightbox-zoom-level">{{ Math.round(imageScale * 100) }}%</span>
+        <button class="lightbox-zoom-btn" type="button" @click.stop="zoomIn" title="放大">+</button>
+        <button class="lightbox-reset-btn" type="button" @click.stop="resetImage" title="重置">⊡</button>
+      </div>
+    </div>
+
+    <button
+      v-if="showBackToTop"
+      class="back-to-top"
+      type="button"
+      @click="scrollToTop"
+      title="回到顶部"
+    >
+      ↑
+    </button>
+
+    <div v-if="promptModalOpen" class="prompt-modal-overlay" @click.self="closePromptModal">
+      <div class="prompt-modal" :class="{ show: promptModalOpen }">
+        <div class="prompt-modal-header">
+          <h3>提示词详情</h3>
+          <button class="prompt-modal-close" type="button" @click="closePromptModal">×</button>
+        </div>
+        <div class="prompt-modal-content">
+          <p class="prompt-modal-text">{{ fullPromptText }}</p>
+        </div>
+        <div class="prompt-modal-footer">
+          <button class="prompt-modal-copy-btn" type="button" @click="copyFullPrompt">
+            {{ copiedFullPrompt ? '已复制' : '复制提示词' }}
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, onUnmounted } from 'vue'
 import axios from 'axios'
 
 interface ArticleBlock {
@@ -82,6 +148,9 @@ interface ArticleBlock {
   prompt: string
   image: string
   xUrl?: string
+  publishedAt?: string
+  author?: string
+  language?: string
 }
 
 interface Article {
@@ -90,13 +159,43 @@ interface Article {
   blocks: ArticleBlock[]
   updateAt: string
   source: string
+  historyPage?: string
+  recentHistory?: {
+    sha: string
+    message: string
+    date: string
+    url: string
+  }[]
+  historyVersions?: {
+    sha: string
+    message: string
+    date: string
+    title: string
+    intro: string
+    blocks: ArticleBlock[]
+  }[]
 }
 
 const article = ref<Article | null>(null)
 const copiedIndex = ref<number | null>(null)
+const copiedDescIndex = ref<number | null>(null)
 const previewOpen = ref(false)
 const previewTitle = ref('')
 const previewIndex = ref(0)
+const activeVersionKey = ref('latest')
+const isRefreshing = ref(false)
+const showBackToTop = ref(false)
+const scrollThreshold = 600
+const promptModalOpen = ref(false)
+const fullPromptText = ref('')
+const currentPromptIndex = ref<number | null>(null)
+const copiedFullPrompt = ref(false)
+const imageScale = ref(1)
+const imagePosition = ref({ x: 0, y: 0 })
+const isDragging = ref(false)
+const dragStart = ref({ x: 0, y: 0 })
+const minScale = 0.5
+const maxScale = 3
 
 const fetchArticle = async () => {
   try {
@@ -118,7 +217,101 @@ const formatUpdateTime = (isoString?: string) => {
   })
 }
 
-onMounted(fetchArticle)
+const handleScroll = () => {
+  showBackToTop.value = window.scrollY > scrollThreshold
+}
+
+const scrollToTop = () => {
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+const openPromptModal = (prompt: string, index: number) => {
+  fullPromptText.value = normalizePrompt(prompt)
+  currentPromptIndex.value = index
+  promptModalOpen.value = true
+  copiedFullPrompt.value = false
+}
+
+const closePromptModal = () => {
+  promptModalOpen.value = false
+  currentPromptIndex.value = null
+  copiedFullPrompt.value = false
+}
+
+const copyFullPrompt = async () => {
+  await navigator.clipboard.writeText(fullPromptText.value || '')
+  copiedFullPrompt.value = true
+  window.setTimeout(() => {
+    if (copiedFullPrompt.value) copiedFullPrompt.value = false
+  }, 1200)
+}
+
+const handleWheel = (e: WheelEvent) => {
+  e.preventDefault()
+  const delta = e.deltaY > 0 ? -0.1 : 0.1
+  const newScale = Math.min(maxScale, Math.max(minScale, imageScale.value + delta))
+  imageScale.value = newScale
+}
+
+const zoomIn = () => {
+  imageScale.value = Math.min(maxScale, imageScale.value + 0.2)
+}
+
+const zoomOut = () => {
+  imageScale.value = Math.max(minScale, imageScale.value - 0.2)
+}
+
+const resetImage = () => {
+  imageScale.value = 1
+  imagePosition.value = { x: 0, y: 0 }
+}
+
+const startDrag = (e: MouseEvent) => {
+  if (imageScale.value <= 1) return
+  isDragging.value = true
+  dragStart.value = { x: e.clientX - imagePosition.value.x, y: e.clientY - imagePosition.value.y }
+}
+
+const drag = (e: MouseEvent) => {
+  if (!isDragging.value) return
+  e.preventDefault()
+  imagePosition.value = {
+    x: e.clientX - dragStart.value.x,
+    y: e.clientY - dragStart.value.y,
+  }
+}
+
+const endDrag = () => {
+  isDragging.value = false
+}
+
+const closePreview = () => {
+  previewOpen.value = false
+  resetImage()
+}
+
+const showNextImage = () => {
+  if (hasNextImage.value) {
+    previewIndex.value += 1
+    resetImage()
+  }
+}
+
+const showPrevImage = () => {
+  if (hasPrevImage.value) {
+    previewIndex.value -= 1
+    resetImage()
+  }
+}
+
+onMounted(() => {
+  fetchArticle()
+  window.addEventListener('scroll', handleScroll)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('scroll', handleScroll)
+})
 
 const normalizePrompt = (prompt?: string) => {
   if (!prompt) return '请在源文档对应章节查看完整提示词。'
@@ -134,37 +327,79 @@ const copyPrompt = async (prompt: string, index: number) => {
   }, 1200)
 }
 
+const copyDescription = async (description: string, index: number) => {
+  await navigator.clipboard.writeText(description || '')
+  copiedDescIndex.value = index
+  window.setTimeout(() => {
+    if (copiedDescIndex.value === index) copiedDescIndex.value = null
+  }, 1200)
+}
+
 const galleryByTitle = computed(() => {
   const map: Record<string, string[]> = {}
-  for (const item of article.value?.blocks || []) {
+  for (const item of visibleBlocks.value || []) {
     if (!map[item.title]) map[item.title] = []
     map[item.title].push(item.image)
   }
   return map
 })
 
+const visibleBlocks = computed(() => {
+  if (!article.value) return []
+  if (activeVersionKey.value === 'latest') return article.value.blocks
+  const target = article.value.historyVersions?.find((v) => v.sha === activeVersionKey.value)
+  return target?.blocks || article.value.blocks
+})
+
+const selectVersion = (key: string) => {
+  isRefreshing.value = true
+  activeVersionKey.value = key
+  window.setTimeout(() => {
+    isRefreshing.value = false
+  }, 420)
+}
+
+const historyLabels = computed(() => {
+  const labels: Record<string, string> = {}
+  const counters: Record<string, number> = {}
+  const records = [...(article.value?.recentHistory || [])]
+  records.reverse()
+
+  for (const item of records) {
+    const date = item.date ? new Date(item.date) : null
+    const ymd = date && !Number.isNaN(date.getTime())
+      ? date.toISOString().slice(0, 10)
+      : 'unknown-date'
+    counters[ymd] = (counters[ymd] || 0) + 1
+    labels[item.sha] = `${ymd}-v${counters[ymd]}`
+  }
+
+  return labels
+})
+
+const historyButtonLabel = (sha: string) => historyLabels.value[sha] || sha
+
+const cardAnimStyle = (index: number) => {
+  const stagger = index * 50
+  const base = isRefreshing.value ? 30 : 0
+  return { animationDelay: `${stagger + base}ms` }
+}
+
 const previewImages = computed(() => galleryByTitle.value[previewTitle.value] || [])
 const currentPreviewImage = computed(() => previewImages.value[previewIndex.value] || '')
 const hasNextImage = computed(() => previewIndex.value < previewImages.value.length - 1)
 const hasPrevImage = computed(() => previewIndex.value > 0)
+
+const imageTransformStyle = computed(() => ({
+  transform: `translate(${imagePosition.value.x}px, ${imagePosition.value.y}px) scale(${imageScale.value})`,
+  cursor: isDragging.value ? 'grabbing' : imageScale.value > 1 ? 'grab' : 'default',
+}))
 
 const openPreview = (item: ArticleBlock) => {
   const images = galleryByTitle.value[item.title] || [item.image]
   previewTitle.value = item.title
   previewIndex.value = Math.max(0, images.indexOf(item.image))
   previewOpen.value = true
-}
-
-const closePreview = () => {
-  previewOpen.value = false
-}
-
-const showNextImage = () => {
-  if (hasNextImage.value) previewIndex.value += 1
-}
-
-const showPrevImage = () => {
-  if (hasPrevImage.value) previewIndex.value -= 1
 }
 </script>
 
@@ -232,6 +467,46 @@ h1 {
   font: 600 13px/1.2 'Trebuchet MS', sans-serif;
 }
 
+.history-panel {
+  margin-top: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.history-main-link {
+  width: fit-content;
+  border: 1px solid #d8b496;
+  background: #fff;
+  color: #7e4a2a;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font: 700 13px/1.2 'Trebuchet MS', sans-serif;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.history-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.history-btn {
+  border: 1px solid #e6c6aa;
+  background: #fff4e6;
+  color: #8d5532;
+  border-radius: 999px;
+  padding: 4px 10px;
+  text-decoration: none;
+  font: 600 12px/1.2 'Trebuchet MS', sans-serif;
+  cursor: pointer;
+}
+
+.history-btn.active {
+  background: #e9c3a1;
+  color: #5a2f16;
+}
+
 .loading {
   text-align: center;
   padding: 80px 24px;
@@ -257,6 +532,13 @@ h1 {
   transition: transform 260ms ease, box-shadow 260ms ease;
 }
 
+.feed.refreshing .card {
+  animation-name: refreshReveal;
+  animation-duration: 0.48s;
+  animation-timing-function: ease;
+  animation-fill-mode: both;
+}
+
 .card:hover {
   transform: translateY(-6px);
   box-shadow: 0 18px 34px rgba(164, 95, 44, 0.2);
@@ -268,7 +550,7 @@ h1 {
 
 .thumb {
   width: 100%;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 3 / 4;
   object-fit: cover;
   display: block;
   transition: transform 380ms ease;
@@ -313,6 +595,22 @@ h2 {
   overflow: hidden;
 }
 
+.desc-row {
+  display: grid;
+  gap: 8px;
+}
+
+.copy-desc-btn {
+  width: fit-content;
+  border: 1px solid #e5c4a6;
+  background: #fff;
+  color: #8b4b21;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font: 600 12px/1.2 'Trebuchet MS', sans-serif;
+  cursor: pointer;
+}
+
 .prompt-block {
   margin-top: 14px;
   border-radius: 12px;
@@ -326,6 +624,13 @@ h2 {
   color: #a25f31;
   font: 700 12px/1.2 'Trebuchet MS', sans-serif;
   letter-spacing: 0.06em;
+}
+
+.published-at {
+  margin-left: 8px;
+  font-weight: 500;
+  color: #9f6c47;
+  font-size: 11px;
 }
 
 .prompt-head {
@@ -375,6 +680,22 @@ h2 {
   text-overflow: ellipsis;
 }
 
+.meta-row {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.meta-row span {
+  border: 1px solid #efd4be;
+  background: #fff;
+  color: #8a5633;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font: 600 12px/1.2 'Trebuchet MS', sans-serif;
+}
+
 .lightbox {
   position: fixed;
   inset: 0;
@@ -384,6 +705,15 @@ h2 {
   justify-content: center;
   z-index: 1200;
   padding: 24px;
+  overflow: hidden;
+}
+
+.lightbox-image-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  pointer-events: none;
 }
 
 .lightbox-image {
@@ -391,6 +721,10 @@ h2 {
   max-height: 84vh;
   border-radius: 12px;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  transition: transform 0.1s ease;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: auto;
 }
 
 .lightbox-arrow,
@@ -424,6 +758,79 @@ h2 {
   cursor: default;
 }
 
+.lightbox-controls {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(8px);
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.lightbox-zoom-btn {
+  border: none;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 20px;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 300;
+}
+
+.lightbox-zoom-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: scale(1.1);
+}
+
+.lightbox-zoom-btn:active {
+  transform: scale(0.95);
+}
+
+.lightbox-zoom-level {
+  color: #fff;
+  font: 600 13px/1 'Trebuchet MS', sans-serif;
+  min-width: 50px;
+  text-align: center;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.lightbox-reset-btn {
+  border: none;
+  background: rgba(255, 170, 100, 0.3);
+  color: #fff;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 18px;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+}
+
+.lightbox-reset-btn:hover {
+  background: rgba(255, 170, 100, 0.45);
+  transform: rotate(90deg);
+}
+
+.lightbox-reset-btn:active {
+  transform: rotate(90deg) scale(0.95);
+}
+
 .footer {
   max-width: 1040px;
   margin: 8px auto 0;
@@ -447,6 +854,19 @@ h2 {
   }
 }
 
+@keyframes refreshReveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+    filter: blur(1px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
 @media (max-width: 700px) {
   .masthead {
     padding-top: 48px;
@@ -454,6 +874,185 @@ h2 {
 
   .feed {
     grid-template-columns: 1fr;
+  }
+}
+
+.back-to-top {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 56px;
+  height: 56px;
+  border: none;
+  background: rgba(164, 95, 44, 0.9);
+  color: #fff;
+  border-radius: 50%;
+  font-size: 28px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(164, 95, 44, 0.4);
+  transition: transform 0.2s ease, background 0.2s ease, opacity 0.3s ease;
+  z-index: 1000;
+  opacity: 0.95;
+}
+
+.back-to-top:hover {
+  background: rgba(164, 95, 44, 1);
+  transform: translateY(-3px);
+  opacity: 1;
+}
+
+.back-to-top:active {
+  transform: translateY(-1px);
+}
+
+.prompt-text {
+  margin: 8px 0 0;
+  color: #4a2f21;
+  line-height: 1.6;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.93rem;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: color 0.2s ease, background 0.2s ease;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.prompt-text:hover {
+  background: rgba(255, 198, 151, 0.3);
+  color: #8b5a2b;
+}
+
+.prompt-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(19, 11, 7, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1300;
+  padding: 24px;
+  animation: overlayFadeIn 0.25s ease;
+}
+
+.prompt-modal {
+  background: linear-gradient(135deg, #fffaf2 0%, #fff5e6 100%);
+  border-radius: 20px;
+  box-shadow: 0 25px 80px rgba(164, 95, 44, 0.25);
+  width: 100%;
+  max-width: 700px;
+  max-height: 80vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transform: scale(0.92) translateY(20px);
+  opacity: 0;
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease;
+}
+
+.prompt-modal.show {
+  transform: scale(1) translateY(0);
+  opacity: 1;
+}
+
+.prompt-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  border-bottom: 1px solid #efd4be;
+  background: linear-gradient(135deg, #fff7ec, #fff0e0);
+}
+
+.prompt-modal-header h3 {
+  margin: 0;
+  color: #8b5a2b;
+  font-size: 1.2rem;
+  font-weight: 700;
+  font-family: Georgia, Cambria, serif;
+}
+
+.prompt-modal-close {
+  border: none;
+  background: transparent;
+  color: #a8714a;
+  font-size: 32px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.prompt-modal-close:hover {
+  background: rgba(168, 113, 74, 0.15);
+  color: #7a4a24;
+  transform: rotate(90deg);
+}
+
+.prompt-modal-content {
+  padding: 24px;
+  overflow-y: auto;
+  flex: 1;
+  max-height: 60vh;
+}
+
+.prompt-modal-text {
+  margin: 0;
+  color: #4a2f21;
+  line-height: 1.8;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.95rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.prompt-modal-footer {
+  padding: 16px 24px;
+  border-top: 1px solid #efd4be;
+  background: linear-gradient(135deg, #fff7ec, #fff0e0);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.prompt-modal-copy-btn {
+  border: 2px solid #d89c5c;
+  background: linear-gradient(135deg, #ffb380, #ff9955);
+  color: #fff;
+  border-radius: 999px;
+  padding: 10px 24px;
+  font: 700 14px/1.2 'Trebuchet MS', sans-serif;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  box-shadow: 0 4px 12px rgba(255, 153, 85, 0.35);
+}
+
+.prompt-modal-copy-btn:hover {
+  background: linear-gradient(135deg, #ffa666, #ff8844);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(255, 153, 85, 0.45);
+}
+
+.prompt-modal-copy-btn:active {
+  transform: translateY(0);
+}
+
+@keyframes overlayFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
 </style>

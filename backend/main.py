@@ -30,7 +30,45 @@ class SyncRequest(BaseModel):
 
 GITHUB_URL = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-gpt-image-2/main/README_zh.md"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-gpt-image-2/main/"
+COMMITS_API_URL = "https://api.github.com/repos/YouMind-OpenLab/awesome-gpt-image-2/commits"
+COMMITS_PAGE_URL = "https://github.com/YouMind-OpenLab/awesome-gpt-image-2/commits/main/README_zh.md"
 DATA_DIR = Path(__file__).parent.parent / "frontend" / "public" / "data"
+
+
+def fetch_markdown_by_sha(sha: str) -> str:
+    url = f"https://raw.githubusercontent.com/YouMind-OpenLab/awesome-gpt-image-2/{sha}/README_zh.md"
+    with httpx.Client(timeout=30.0) as client:
+        response = client.get(url)
+        response.raise_for_status()
+    return response.text
+
+
+def fetch_recent_history() -> list:
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(
+                COMMITS_API_URL,
+                params={"path": "README_zh.md", "sha": "main", "per_page": 10},
+            )
+            response.raise_for_status()
+            commits = response.json()
+
+        history = []
+        for commit in commits:
+            sha = commit.get("sha", "")
+            commit_info = commit.get("commit", {})
+            author_info = commit_info.get("author", {})
+            history.append(
+                {
+                    "sha": sha[:7],
+                    "message": clean_text((commit_info.get("message") or "").splitlines()[0]),
+                    "date": author_info.get("date", ""),
+                    "url": commit.get("html_url", ""),
+                }
+            )
+        return history
+    except Exception:
+        return []
 
 def clean_text(text: str) -> str:
     value = re.sub(r"\s+", " ", text).strip()
@@ -42,7 +80,8 @@ def parse_markdown(markdown_content: str) -> dict:
     title_match = re.search(r"^#\s+(.+)$", markdown_content, re.MULTILINE)
     title = clean_text(title_match.group(1)) if title_match else "GPT Image 2 图文精选"
 
-    heading_pattern = re.compile(r"^(##+)\s+(.+)$")
+    no_heading_pattern = re.compile(r"^###\s+(No\.\s*\d+:\s+.+)$")
+    image_heading_pattern = re.compile(r"^#####\s+(Image\s+\d+)\s*$", re.IGNORECASE)
     image_pattern = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
     html_image_pattern = re.compile(r'<img[^>]*src="([^"]+)"[^>]*alt="([^"]*)"[^>]*>', re.IGNORECASE)
 
@@ -57,23 +96,34 @@ def parse_markdown(markdown_content: str) -> dict:
     prompt_lines: list[str] = []
     current_x_url = ""
     current_block_indexes: list[int] = []
+    current_published_at = ""
+    current_author = ""
+    current_language = ""
+    expect_description_text = False
 
     for raw_line in lines:
         line = raw_line.strip()
         if not line:
             continue
 
-        heading_match = heading_pattern.match(line)
-        if heading_match:
-            current_heading = clean_text(heading_match.group(2))
-            current_section = current_heading
-            if current_heading.startswith("No."):
-                current_title = current_heading
-                current_description = ""
-                last_prompt = ""
-                current_x_url = ""
-                current_block_indexes = []
+        no_heading_match = no_heading_pattern.match(line)
+        if no_heading_match:
+            current_title = clean_text(no_heading_match.group(1))
+            current_section = current_title
+            current_description = ""
+            last_prompt = ""
+            current_x_url = ""
+            current_block_indexes = []
+            current_published_at = ""
+            current_author = ""
+            current_language = ""
+            expect_description_text = False
             context_buffer = []
+            continue
+
+        image_heading_match = image_heading_pattern.match(line)
+        if image_heading_match:
+            current_section = clean_text(image_heading_match.group(1))
             continue
 
         if line.startswith("- **来源:**"):
@@ -83,6 +133,33 @@ def parse_markdown(markdown_content: str) -> dict:
                 for idx in current_block_indexes:
                     if 0 <= idx < len(blocks):
                         blocks[idx]["xUrl"] = current_x_url
+            continue
+
+        if line.startswith("- **发布时间:**"):
+            published_match = re.search(r"- \*\*发布时间:\*\*\s*(.+)$", line)
+            if published_match:
+                current_published_at = clean_text(published_match.group(1))
+                for idx in current_block_indexes:
+                    if 0 <= idx < len(blocks):
+                        blocks[idx]["publishedAt"] = current_published_at
+            continue
+
+        if line.startswith("- **作者:**"):
+            author_match = re.search(r"- \*\*作者:\*\*\s*(.+)$", line)
+            if author_match:
+                current_author = clean_text(author_match.group(1))
+                for idx in current_block_indexes:
+                    if 0 <= idx < len(blocks):
+                        blocks[idx]["author"] = current_author
+            continue
+
+        if line.startswith("- **多语言:**"):
+            lang_match = re.search(r"- \*\*多语言:\*\*\s*(.+)$", line)
+            if lang_match:
+                current_language = clean_text(lang_match.group(1))
+                for idx in current_block_indexes:
+                    if 0 <= idx < len(blocks):
+                        blocks[idx]["language"] = current_language
             continue
 
         if line.startswith("```"):
@@ -102,9 +179,19 @@ def parse_markdown(markdown_content: str) -> dict:
 
         if line.startswith("####") and "描述" in line:
             current_description = ""
+            expect_description_text = True
             continue
 
         if line.startswith("####") and "提示词" in line:
+            expect_description_text = False
+            continue
+
+        if line.startswith("####"):
+            expect_description_text = False
+
+        if expect_description_text and line and not line.startswith("#") and not line.startswith("!") and not line.startswith("<"):
+            current_description = clean_text(re.sub(r"^[\-*>\s]*", "", line))
+            expect_description_text = False
             continue
 
         if current_description == "" and line and not line.startswith("#") and not line.startswith("!") and not line.startswith("<") and "提示词" not in line:
@@ -140,6 +227,9 @@ def parse_markdown(markdown_content: str) -> dict:
                     "prompt": last_prompt,
                     "image": image_url,
                     "xUrl": current_x_url,
+                    "publishedAt": current_published_at,
+                    "author": current_author,
+                    "language": current_language,
                 }
             )
             current_block_indexes.append(len(blocks) - 1)
@@ -162,6 +252,9 @@ def parse_markdown(markdown_content: str) -> dict:
                     "prompt": last_prompt,
                     "image": image_url,
                     "xUrl": current_x_url,
+                    "publishedAt": current_published_at,
+                    "author": current_author,
+                    "language": current_language,
                 }
             )
             current_block_indexes.append(len(blocks) - 1)
@@ -230,6 +323,27 @@ async def sync_article(request: SyncRequest = SyncRequest()):
             
         markdown_content = response.text
         parsed = parse_markdown(markdown_content)
+        history = fetch_recent_history()
+        history_versions = []
+        for item in history:
+            sha = item.get("sha", "")
+            if not sha:
+                continue
+            try:
+                version_markdown = fetch_markdown_by_sha(sha)
+                parsed_version = parse_markdown(version_markdown)
+                history_versions.append(
+                    {
+                        "sha": sha,
+                        "message": item.get("message", ""),
+                        "date": item.get("date", ""),
+                        "title": parsed_version["title"],
+                        "intro": parsed_version["intro"],
+                        "blocks": parsed_version["blocks"],
+                    }
+                )
+            except Exception:
+                continue
         update_time = datetime.now(timezone.utc).isoformat()
         
         article = {
@@ -237,7 +351,10 @@ async def sync_article(request: SyncRequest = SyncRequest()):
             "intro": parsed["intro"],
             "blocks": parsed["blocks"],
             "updateAt": update_time,
-            "source": GITHUB_URL
+            "source": GITHUB_URL,
+            "historyPage": COMMITS_PAGE_URL,
+            "recentHistory": history,
+            "historyVersions": history_versions,
         }
         
         # 保存到 frontend/public/data/article.json
