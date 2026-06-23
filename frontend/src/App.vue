@@ -67,6 +67,23 @@
                   >
                     via X
                   </a>
+                  <button
+                    class="fav-btn"
+                    type="button"
+                    :class="{ active: isBookmarked(index, activeVersionKey) }"
+                    :title="isBookmarked(index, activeVersionKey) ? '取消收藏' : '收藏'"
+                    @click="toggleBookmark(item, index)"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path
+                        d="M5 4C5 2.89543 5.89543 2 7 2H17C18.1046 2 19 2.89543 19 4V21L12 17L5 21V4Z"
+                        :fill="isBookmarked(index, activeVersionKey) ? 'currentColor' : 'none'"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                  </button>
                   <button class="copy-btn" type="button" @click="copyPrompt(item.prompt, index)">
                     {{ copiedIndex === index ? '已复制' : '复制' }}
                   </button>
@@ -86,6 +103,88 @@
     <footer class="footer" v-if="article">
       <a :href="article.source" target="_blank" rel="noopener noreferrer">查看原始仓库文档</a>
     </footer>
+
+    <!-- 右侧收藏面板 - 桌面端 -->
+    <aside v-if="bookmarks.length > 0" class="bookmark-panel">
+      <div class="bookmark-panel-header">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+          <path d="M5 4C5 2.89543 5.89543 2 7 2H17C18.1046 2 19 2.89543 19 4V21L12 17L5 21V4Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="currentColor"/>
+        </svg>
+        <span>收藏 ({{ bookmarks.length }})</span>
+      </div>
+      <div class="bookmark-panel-list">
+        <button
+          v-for="(b, bi) in bookmarks"
+          :key="`${b.blockIndex}-${b.versionKey}`"
+          class="bookmark-item"
+          type="button"
+          @click="handleBookmarkClick(b)"
+        >
+          <img class="bookmark-thumb" :src="b.image" :alt="b.title" loading="lazy" />
+          <span class="bookmark-title">{{ b.title }}</span>
+          <button
+            class="bookmark-remove"
+            type="button"
+            title="移除收藏"
+            @click.stop="bookmarks = bookmarks.filter((_, i) => i !== bi)"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </button>
+      </div>
+    </aside>
+
+    <!-- 移动端收藏入口按钮 + 抽屉 -->
+    <button
+      v-if="bookmarks.length > 0"
+      class="bookmark-mobile-entry"
+      type="button"
+      :class="{ active: bookmarkMobileOpen }"
+      @click="bookmarkMobileOpen = !bookmarkMobileOpen"
+      title="收藏列表"
+    >
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+        <path d="M5 4C5 2.89543 5.89543 2 7 2H17C18.1046 2 19 2.89543 19 4V21L12 17L5 21V4Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="currentColor"/>
+      </svg>
+      {{ bookmarks.length }}
+    </button>
+
+    <div v-if="bookmarkMobileOpen && bookmarks.length > 0" class="bookmark-mobile-overlay" @click.self="bookmarkMobileOpen = false">
+      <div class="bookmark-mobile-drawer">
+        <div class="bookmark-mobile-header">
+          <span>收藏 ({{ bookmarks.length }})</span>
+          <button class="bookmark-mobile-close" type="button" @click="bookmarkMobileOpen = false">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div class="bookmark-mobile-list">
+          <button
+            v-for="(b, bi) in bookmarks"
+            :key="`m-${b.blockIndex}-${b.versionKey}`"
+            class="bookmark-item"
+            type="button"
+            @click="bookmarkMobileOpen = false; handleBookmarkClick(b)"
+          >
+            <img class="bookmark-thumb" :src="b.image" :alt="b.title" loading="lazy" />
+            <span class="bookmark-title">{{ b.title }}</span>
+            <button
+              class="bookmark-remove"
+              type="button"
+              title="移除收藏"
+              @click.stop="bookmarks = bookmarks.filter((_, i) => i !== bi)"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </button>
+        </div>
+      </div>
+    </div>
 
     <div v-if="previewOpen" class="lightbox" @click="closePreview" @wheel="handleWheel">
       <button class="lightbox-close" type="button" @click.stop="closePreview">×</button>
@@ -138,7 +237,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, onUnmounted } from 'vue'
+import { ref, onMounted, computed, onUnmounted, nextTick } from 'vue'
 import axios from 'axios'
 
 interface ArticleBlock {
@@ -151,6 +250,15 @@ interface ArticleBlock {
   publishedAt?: string
   author?: string
   language?: string
+}
+
+interface BookmarkItem {
+  image: string
+  title: string
+  prompt: string
+  section: string
+  blockIndex: number
+  versionKey: string
 }
 
 interface Article {
@@ -196,6 +304,15 @@ const isDragging = ref(false)
 const dragStart = ref({ x: 0, y: 0 })
 const minScale = 0.5
 const maxScale = 3
+
+const bookmarks = ref<BookmarkItem[]>([])
+const bookmarkMobileOpen = ref(false)
+
+const isBookmarked = (index: number, versionKey: string): boolean => {
+  return bookmarks.value.some(
+    (b) => b.blockIndex === index && b.versionKey === versionKey
+  )
+}
 
 const fetchArticle = async () => {
   try {
@@ -357,6 +474,36 @@ const selectVersion = (key: string) => {
   window.setTimeout(() => {
     isRefreshing.value = false
   }, 420)
+}
+
+const toggleBookmark = (item: ArticleBlock, index: number) => {
+  const vk = activeVersionKey.value
+  if (isBookmarked(index, vk)) {
+    bookmarks.value = bookmarks.value.filter(
+      (b) => !(b.blockIndex === index && b.versionKey === vk)
+    )
+  } else {
+    bookmarks.value.push({
+      image: item.image,
+      title: item.title,
+      prompt: item.prompt,
+      section: item.section,
+      blockIndex: index,
+      versionKey: vk,
+    })
+  }
+}
+
+const handleBookmarkClick = async (item: BookmarkItem) => {
+  if (activeVersionKey.value !== item.versionKey) {
+    selectVersion(item.versionKey)
+    await nextTick()
+    await nextTick()
+  }
+  const cards = document.querySelectorAll('.card')
+  if (cards[item.blockIndex]) {
+    cards[item.blockIndex].scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
 }
 
 const historyLabels = computed(() => {
@@ -665,6 +812,31 @@ h2 {
   cursor: pointer;
 }
 
+.fav-btn {
+  border: 1px solid #e5c4a6;
+  background: #fff;
+  color: #c4956a;
+  border-radius: 999px;
+  padding: 4px 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+}
+
+.fav-btn:hover {
+  border-color: #d89c5c;
+  color: #b87640;
+  transform: scale(1.08);
+}
+
+.fav-btn.active {
+  background: #fff4e6;
+  border-color: #d89c5c;
+  color: #c4702a;
+}
+
 .prompt-text {
   margin: 8px 0 0;
   color: #4a2f21;
@@ -841,6 +1013,227 @@ h2 {
   color: #9d5127;
   text-decoration: none;
   border-bottom: 1px dashed currentColor;
+}
+
+/* 收藏面板 - 桌面端 */
+.bookmark-panel {
+  position: fixed;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 360px;
+  max-height: 60vh;
+  background: #fffaf2;
+  border: 1px solid #f2d3b7;
+  border-radius: 18px;
+  box-shadow: 0 12px 30px rgba(164, 95, 44, 0.11);
+  z-index: 500;
+  overflow: hidden;
+  display: none;
+  flex-direction: column;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+@media (min-width: 1280px) {
+  .bookmark-panel {
+    display: flex;
+  }
+}
+
+.bookmark-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #efd4be;
+  background: linear-gradient(135deg, #fff7ec, #fff0e0);
+  font: 700 13px/1.2 'Trebuchet MS', sans-serif;
+  color: #8b5a2b;
+  flex-shrink: 0;
+}
+
+.bookmark-panel-list {
+  overflow-y: auto;
+  flex: 1;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bookmark-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+  text-align: left;
+  width: 100%;
+}
+
+.bookmark-item:hover {
+  background: #fff7ec;
+  border-color: #f2dcc4;
+}
+
+.bookmark-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid #efd4be;
+}
+
+.bookmark-title {
+  flex: 1;
+  font: 600 12px/1.3 'Trebuchet MS', sans-serif;
+  color: #6a4a39;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookmark-remove {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: #c4956a;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease, color 0.2s ease;
+  opacity: 0;
+}
+
+.bookmark-item:hover .bookmark-remove {
+  opacity: 1;
+}
+
+.bookmark-remove:hover {
+  background: rgba(168, 113, 74, 0.15);
+  color: #7a4a24;
+}
+
+/* 移动端收藏 */
+.bookmark-mobile-entry {
+  position: fixed;
+  right: 24px;
+  bottom: 92px;
+  width: 56px;
+  height: 56px;
+  border: 1px solid #f2d3b7;
+  background: rgba(255, 250, 242, 0.95);
+  color: #c4702a;
+  border-radius: 50%;
+  font: 700 11px/1 'Trebuchet MS', sans-serif;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(164, 95, 44, 0.25);
+  transition: transform 0.2s ease, background 0.2s ease;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+}
+
+.bookmark-mobile-entry:hover {
+  background: rgba(255, 240, 220, 1);
+  transform: translateY(-3px);
+}
+
+.bookmark-mobile-entry.active {
+  background: #fff4e6;
+  border-color: #d89c5c;
+}
+
+.bookmark-mobile-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(19, 11, 7, 0.5);
+  backdrop-filter: blur(4px);
+  z-index: 1400;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: overlayFadeIn 0.25s ease;
+}
+
+.bookmark-mobile-drawer {
+  width: 100%;
+  max-width: 500px;
+  max-height: 55vh;
+  background: #fffaf2;
+  border-radius: 20px 20px 0 0;
+  border: 1px solid #f2d3b7;
+  box-shadow: 0 -8px 40px rgba(164, 95, 44, 0.15);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transform: translateY(100%);
+  animation: slideUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes slideUp {
+  to {
+    transform: translateY(0);
+  }
+}
+
+.bookmark-mobile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid #efd4be;
+  background: linear-gradient(135deg, #fff7ec, #fff0e0);
+  font: 700 14px/1.2 'Trebuchet MS', sans-serif;
+  color: #8b5a2b;
+  flex-shrink: 0;
+}
+
+.bookmark-mobile-close {
+  border: none;
+  background: transparent;
+  color: #a8714a;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.bookmark-mobile-close:hover {
+  background: rgba(168, 113, 74, 0.15);
+  color: #7a4a24;
+}
+
+.bookmark-mobile-list {
+  overflow-y: auto;
+  flex: 1;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+@media (min-width: 1280px) {
+  .bookmark-mobile-entry,
+  .bookmark-mobile-overlay {
+    display: none;
+  }
 }
 
 @keyframes reveal {
