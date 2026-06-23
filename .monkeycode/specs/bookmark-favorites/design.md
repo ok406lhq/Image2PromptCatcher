@@ -97,6 +97,7 @@ const isBookmarked = (index: number, versionKey: string): boolean => {
 ```
 
 **样式**: 沿用现有暖色调风格：
+- 宽度: `360px`
 - 背景: `#fffaf2` / `#fff7ec`
 - 边框: `1px solid #f2d3b7`
 - 圆角: `18px`
@@ -110,22 +111,17 @@ const isBookmarked = (index: number, versionKey: string): boolean => {
 
 ### 5. 缩略图点击处理 (跨版本跳转)
 
+点击收藏缩略图后切换至对应版本并滚动到卡片位置，不弹出提示词模态框。
+
 ```typescript
 const handleBookmarkClick = (item: BookmarkItem) => {
-  // 1. 若当前版本与收藏版本不同，先切换版本
   if (activeVersionKey.value !== item.versionKey) {
-    activeVersionKey.value = item.versionKey
+    selectVersion(item.versionKey)
   }
-  // 2. 等待 DOM 更新后滚动到对应卡片
   nextTick(() => {
     const cards = document.querySelectorAll('.card')
     if (cards[item.blockIndex]) {
       cards[item.blockIndex].scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }
-    // 3. 打开提示词模态框
-    const block = visibleBlocks.value[item.blockIndex]
-    if (block) {
-      openPromptModal(block.prompt, item.blockIndex)
     }
   })
 }
@@ -184,3 +180,11 @@ interface BookmarkItem {
 [^1]: (App.vue#L140-L403) - 现有组件逻辑与数据流
 [^2]: (App.vue#L406-L1058) - 现有 UI 样式系统
 [^3]: (vite.config.ts) - Vite 配置
+
+## Changelog
+
+| 日期 | 变更 |
+|------|------|
+| 2026-06-23 | 初始设计完成 |
+| 2026-06-23 | 点击缩略图行为调整：移除提示词模态框弹出，仅切换版本 + 滚动 |
+| 2026-06-23 | 收藏面板宽度从 180px 调整为 360px |
