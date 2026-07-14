@@ -295,34 +295,28 @@ def save_camo_cache(cache: dict):
 
 
 def build_camo_url_map(client: httpx.Client, markdown_content: str) -> dict:
-    cms_urls = set()
-    for match in re.finditer(r"!\[([^\]]*)\]\((https?://cms-assets\.youmind\.com/[^)\s]+)\)", markdown_content):
-        cms_urls.add(match.group(2))
-    if not cms_urls:
-        return {}
-
-    md_snippets = []
-    for u in list(cms_urls)[:50]:
-        md_snippets.append(f"![]({u})")
-
     try:
-        resp = client.post(
+        response = client.post(
             "https://api.github.com/markdown",
-            json={"text": "\n\n".join(md_snippets), "mode": "gfm"},
-            timeout=30.0,
+            json={"text": markdown_content, "mode": "gfm", "context": "YouMind-OpenLab/awesome-gpt-image-2"},
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "python-httpx",
+            },
         )
-        resp.raise_for_status()
-        html = resp.text
-
-        camo_map = {}
-        for u in cms_urls:
-            h = binascii.crc32(u.encode()) & 0xFFFFFFFF
-            camo_base = f"https://camo.githubusercontent.com/{h:x}/"
-            pattern = re.escape(f"https://camo.githubusercontent.com/{h:x}/") + r"[a-f0-9]{40}"
-            found = re.findall(pattern, html)
-            if found:
-                camo_map[u] = found[0]
-        return camo_map
+        response.raise_for_status()
+        html = response.text
+        camo_urls = re.findall(r'src="(https://camo\.githubusercontent\.com/[^"]+)"', html)
+        url_map = {}
+        for camo_url in camo_urls:
+            hex_part = camo_url.split("/")[-1]
+            try:
+                original = binascii.unhexlify(hex_part).decode()
+                if CMS_ASSETS_PREFIX in original:
+                    url_map[original] = camo_url
+            except Exception:
+                pass
+        return url_map
     except Exception as e:
         print(f"  build_camo_url_map failed: {e}")
         return {}
@@ -331,27 +325,8 @@ def build_camo_url_map(client: httpx.Client, markdown_content: str) -> dict:
 def build_camo_map_for_urls(client: httpx.Client, urls: list[str]) -> dict:
     if not urls:
         return {}
-    md_snippets = [f"![]({u})" for u in urls]
-    try:
-        resp = client.post(
-            "https://api.github.com/markdown",
-            json={"text": "\n\n".join(md_snippets), "mode": "gfm"},
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        html = resp.text
-        camo_map = {}
-        for u in urls:
-            h = binascii.crc32(u.encode()) & 0xFFFFFFFF
-            camo_base = f"https://camo.githubusercontent.com/{h:x}/"
-            pattern = re.escape(camo_base) + r"[a-f0-9]{40}"
-            found = re.findall(pattern, html)
-            if found:
-                camo_map[u] = found[0]
-        return camo_map
-    except Exception as e:
-        print(f"  build_camo_map_for_urls failed: {e}")
-        return {}
+    markdown = "\n".join([f"![]({u})" for u in urls])
+    return build_camo_url_map(client, markdown)
 
 
 def collect_cms_urls(blocks: list[dict]) -> set[str]:
