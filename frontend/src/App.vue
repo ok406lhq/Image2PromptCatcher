@@ -1,7 +1,6 @@
 <template>
   <div class="page">
     <header class="masthead">
-      <img class="site-logo" src="/logo.webp" alt="anomo" />
       <p class="tag">AI IMAGE JOURNAL</p>
       <h1>{{ article?.title || 'GPT Image 2 图文精选' }}</h1>
       <p class="lead">{{ article?.intro }}</p>
@@ -589,13 +588,6 @@ const openPreview = (item: ArticleBlock) => {
   margin: 0 auto;
   padding: 64px 24px 32px;
   text-align: center;
-}
-
-.site-logo {
-  width: 72px;
-  height: 72px;
-  border-radius: 16px;
-  margin-bottom: 14px;
 }
 
 .tag {

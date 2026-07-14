@@ -72,6 +72,13 @@ def build_camo_url_map(markdown_content: str) -> dict[str, str]:
         return {}
 
 
+def build_camo_map_for_urls(urls: list[str]) -> dict[str, str]:
+    if not urls:
+        return {}
+    markdown = "\n".join([f"![]({u})" for u in urls])
+    return build_camo_url_map(markdown)
+
+
 def resolve_camo_url(image_url: str) -> str:
     try:
         markdown = f"![img]({image_url})"
@@ -439,6 +446,20 @@ async def sync_article(request: SyncRequest = SyncRequest()):
 
         camo_map = load_camo_cache()
         camo_map.update(build_camo_url_map(markdown_content))
+
+        all_blocks = list(parsed["blocks"])
+        for version in history_versions:
+            all_blocks.extend(version.get("blocks", []))
+
+        unresolved = set()
+        for block in all_blocks:
+            img = block.get("image", "")
+            if "cms-assets.youmind.com" in img and img not in camo_map:
+                unresolved.add(img)
+
+        if unresolved:
+            camo_map.update(build_camo_map_for_urls(list(unresolved)))
+
         save_camo_cache(camo_map)
         for block in parsed["blocks"]:
             img = block.get("image", "")
