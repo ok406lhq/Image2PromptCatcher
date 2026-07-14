@@ -1,11 +1,14 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 import httpx
 import re
 import json
+import binascii
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 app = FastAPI(title="GPT-Image2 Article API")
 
@@ -24,6 +27,9 @@ class Article(BaseModel):
     blocks: list[dict]
     updateAt: str
     source: str
+    historyPage: str = ""
+    recentHistory: list[dict] = []
+    historyVersions: list[dict] = []
 
 class SyncRequest(BaseModel):
     force: bool = False
@@ -33,6 +39,91 @@ REPO_RAW_BASE = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-gpt-i
 COMMITS_API_URL = "https://api.github.com/repos/YouMind-OpenLab/awesome-gpt-image-2/commits"
 COMMITS_PAGE_URL = "https://github.com/YouMind-OpenLab/awesome-gpt-image-2/commits/main/README_zh.md"
 DATA_DIR = Path(__file__).parent.parent / "frontend" / "public" / "data"
+GITHUB_MARKDOWN_API = "https://api.github.com/markdown"
+GITHUB_REPO_CONTEXT = "YouMind-OpenLab/awesome-gpt-image-2"
+
+
+def build_camo_url_map(markdown_content: str) -> dict[str, str]:
+    try:
+        with httpx.Client(timeout=120.0) as client:
+            response = client.post(
+                GITHUB_MARKDOWN_API,
+                json={"text": markdown_content, "mode": "gfm", "context": GITHUB_REPO_CONTEXT},
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "python-httpx",
+                },
+            )
+            response.raise_for_status()
+        html = response.text
+        camo_urls = re.findall(r'src="(https://camo\.githubusercontent\.com/[^"]+)"', html)
+        url_map: dict[str, str] = {}
+        for camo_url in camo_urls:
+            hex_part = camo_url.split("/")[-1]
+            try:
+                original = binascii.unhexlify(hex_part).decode()
+                if "cms-assets.youmind.com" in original:
+                    url_map[original] = camo_url
+            except Exception:
+                pass
+        return url_map
+    except Exception as e:
+        print(f"[WARN] Failed to build camo URL map: {e}")
+        return {}
+
+
+def resolve_camo_url(image_url: str) -> str:
+    try:
+        markdown = f"![img]({image_url})"
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                GITHUB_MARKDOWN_API,
+                json={"text": markdown, "mode": "gfm", "context": GITHUB_REPO_CONTEXT},
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "python-httpx",
+                },
+            )
+            response.raise_for_status()
+        html = response.text
+        match = re.search(r'src="(https://camo\.githubusercontent\.com/[^"]+)"', html)
+        if match:
+            return match.group(1)
+    except Exception as e:
+        print(f"[WARN] Failed to resolve camo URL for {image_url}: {e}")
+    return image_url
+
+
+CAMO_CACHE_FILE = DATA_DIR.parent / "camo_cache.json"
+
+
+def load_camo_cache() -> dict[str, str]:
+    if CAMO_CACHE_FILE.exists():
+        try:
+            with open(CAMO_CACHE_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_camo_cache(camo_map: dict[str, str]) -> None:
+    try:
+        with open(CAMO_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(camo_map, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def load_existing_article() -> dict:
+    article_file = DATA_DIR / "article.json"
+    if article_file.exists():
+        try:
+            with open(article_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
 
 
 def fetch_markdown_by_sha(sha: str) -> str:
@@ -320,7 +411,7 @@ async def sync_article(request: SyncRequest = SyncRequest()):
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(GITHUB_URL)
             response.raise_for_status()
-            
+
         markdown_content = response.text
         parsed = parse_markdown(markdown_content)
         history = fetch_recent_history()
@@ -345,7 +436,22 @@ async def sync_article(request: SyncRequest = SyncRequest()):
             except Exception:
                 continue
         update_time = datetime.now(timezone.utc).isoformat()
-        
+
+        camo_map = load_camo_cache()
+        camo_map.update(build_camo_url_map(markdown_content))
+        save_camo_cache(camo_map)
+        for block in parsed["blocks"]:
+            img = block.get("image", "")
+            if img in camo_map:
+                block["image"] = camo_map[img]
+        for version in history_versions:
+            for block in version.get("blocks", []):
+                img = block.get("image", "")
+                if img in camo_map:
+                    block["image"] = camo_map[img]
+
+        previous = load_existing_article()
+
         article = {
             "title": parsed["title"],
             "intro": parsed["intro"],
@@ -353,8 +459,8 @@ async def sync_article(request: SyncRequest = SyncRequest()):
             "updateAt": update_time,
             "source": GITHUB_URL,
             "historyPage": COMMITS_PAGE_URL,
-            "recentHistory": history,
-            "historyVersions": history_versions,
+            "recentHistory": history if history else previous.get("recentHistory", []),
+            "historyVersions": history_versions if history_versions else previous.get("historyVersions", []),
         }
         
         # 保存到 frontend/public/data/article.json
@@ -368,6 +474,44 @@ async def sync_article(request: SyncRequest = SyncRequest()):
         raise HTTPException(status_code=500, detail=f"GitHub API 请求失败：{str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"处理文章失败：{str(e)}")
+
+PROXY_IMAGE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+}
+
+_CAMO_CACHE: dict[str, str] = {}
+
+@app.get("/api/proxy-image")
+async def proxy_image(url: str = Query(..., description="要代理的图片 URL")):
+    hostname = urlparse(url).hostname
+    if hostname not in ("cms-assets.youmind.com", "marketing-assets.youmind.com"):
+        raise HTTPException(status_code=403, detail="不允许代理该域名的图片")
+
+    if url not in _CAMO_CACHE:
+        _CAMO_CACHE[url] = resolve_camo_url(url)
+
+    camo_url = _CAMO_CACHE[url]
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            upstream = await client.get(camo_url, headers=PROXY_IMAGE_HEADERS)
+            upstream.raise_for_status()
+            content = upstream.content
+
+        content_type = upstream.headers.get("content-type", "image/jpeg")
+        cache_control = upstream.headers.get("cache-control", "public, max-age=86400")
+
+        return Response(
+            content=content,
+            media_type=content_type,
+            headers={"Cache-Control": cache_control},
+        )
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"上游图片请求失败：{str(e)}")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"上游图片服务器不可达：{str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

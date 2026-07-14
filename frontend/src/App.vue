@@ -1,6 +1,7 @@
 <template>
   <div class="page">
     <header class="masthead">
+      <img class="site-logo" src="/logo.webp" alt="anomo" />
       <p class="tag">AI IMAGE JOURNAL</p>
       <h1>{{ article?.title || 'GPT Image 2 图文精选' }}</h1>
       <p class="lead">{{ article?.intro }}</p>
@@ -39,7 +40,7 @@
           <div class="thumb-wrap">
             <img
               class="thumb"
-              :src="item.image"
+              :src="proxyImageUrl(item.image)"
               :alt="item.title"
               loading="lazy"
               @click="openPreview(item)"
@@ -120,7 +121,7 @@
           type="button"
           @click="handleBookmarkClick(b)"
         >
-          <img class="bookmark-thumb" :src="b.image" :alt="b.title" loading="lazy" />
+          <img class="bookmark-thumb" :src="proxyImageUrl(b.image)" :alt="b.title" loading="lazy" />
           <span class="bookmark-title">{{ b.title }}</span>
           <button
             class="bookmark-remove"
@@ -169,7 +170,7 @@
             type="button"
             @click="bookmarkMobileOpen = false; handleBookmarkClick(b)"
           >
-            <img class="bookmark-thumb" :src="b.image" :alt="b.title" loading="lazy" />
+            <img class="bookmark-thumb" :src="proxyImageUrl(b.image)" :alt="b.title" loading="lazy" />
             <span class="bookmark-title">{{ b.title }}</span>
             <button
               class="bookmark-remove"
@@ -192,7 +193,7 @@
       <div class="lightbox-image-wrapper" @mousedown.stop="startDrag" @mousemove.stop="drag" @mouseup.stop="endDrag" @mouseleave.stop="endDrag" @click.stop>
         <img
           class="lightbox-image"
-          :src="currentPreviewImage"
+          :src="proxyImageUrl(currentPreviewImage)"
           alt="预览图"
           :style="imageTransformStyle"
           @dragstart.prevent
@@ -312,6 +313,19 @@ const isBookmarked = (index: number, versionKey: string): boolean => {
   return bookmarks.value.some(
     (b) => b.blockIndex === index && b.versionKey === versionKey
   )
+}
+
+const PROXY_HOSTS = ['cms-assets.youmind.com', 'marketing-assets.youmind.com']
+
+const proxyImageUrl = (url: string): string => {
+  if (!url) return url
+  try {
+    const hostname = new URL(url).hostname
+    if (PROXY_HOSTS.includes(hostname)) {
+      return `/api/proxy-image?url=${encodeURIComponent(url)}`
+    }
+  } catch {}
+  return url
 }
 
 const fetchArticle = async () => {
@@ -574,6 +588,14 @@ const openPreview = (item: ArticleBlock) => {
   max-width: 1040px;
   margin: 0 auto;
   padding: 64px 24px 32px;
+  text-align: center;
+}
+
+.site-logo {
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  margin-bottom: 14px;
 }
 
 .tag {
