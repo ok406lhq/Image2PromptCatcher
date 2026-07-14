@@ -39,7 +39,7 @@ jobs:
           git config --local user.name "ok406lhq"
           git config --local user.email "22291214+ok406lhq@users.noreply.github.com"
 
-          git add frontend/public/data/article.json || true
+          git add frontend/public/data/article.json frontend/public/data/camo_cache.json || true
           if ! git diff --staged --quiet; then
             git commit -m "docs: auto-update article"
             git push

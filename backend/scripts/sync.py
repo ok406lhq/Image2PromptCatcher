@@ -7,6 +7,7 @@ GitHub Actions 定时任务脚本
 import httpx
 import re
 import json
+import binascii
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
@@ -18,6 +19,9 @@ COMMITS_PAGE_URL = "https://github.com/YouMind-OpenLab/awesome-gpt-image-2/commi
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "frontend" / "public" / "data"
 ARTICLE_FILE = DATA_DIR / "article.json"
+CAMO_CACHE_FILE = DATA_DIR / "camo_cache.json"
+
+CMS_ASSETS_PREFIX = "cms-assets.youmind.com"
 
 
 def fetch_recent_history(client: httpx.Client) -> list:
@@ -276,19 +280,113 @@ def is_noise_image(url: str) -> bool:
     ]
     return any(keyword in url for keyword in noise_keywords)
 
+def load_camo_cache() -> dict:
+    if CAMO_CACHE_FILE.exists():
+        try:
+            return json.loads(CAMO_CACHE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def save_camo_cache(cache: dict):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    CAMO_CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def build_camo_url_map(client: httpx.Client, markdown_content: str) -> dict:
+    cms_urls = set()
+    for match in re.finditer(r"!\[([^\]]*)\]\((https?://cms-assets\.youmind\.com/[^)\s]+)\)", markdown_content):
+        cms_urls.add(match.group(2))
+    if not cms_urls:
+        return {}
+
+    md_snippets = []
+    for u in list(cms_urls)[:50]:
+        md_snippets.append(f"![]({u})")
+
+    try:
+        resp = client.post(
+            "https://api.github.com/markdown",
+            json={"text": "\n\n".join(md_snippets), "mode": "gfm"},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        html = resp.text
+
+        camo_map = {}
+        for u in cms_urls:
+            h = binascii.crc32(u.encode()) & 0xFFFFFFFF
+            camo_base = f"https://camo.githubusercontent.com/{h:x}/"
+            pattern = re.escape(f"https://camo.githubusercontent.com/{h:x}/") + r"[a-f0-9]{40}"
+            found = re.findall(pattern, html)
+            if found:
+                camo_map[u] = found[0]
+        return camo_map
+    except Exception as e:
+        print(f"  build_camo_url_map failed: {e}")
+        return {}
+
+
+def build_camo_map_for_urls(client: httpx.Client, urls: list[str]) -> dict:
+    if not urls:
+        return {}
+    md_snippets = [f"![]({u})" for u in urls]
+    try:
+        resp = client.post(
+            "https://api.github.com/markdown",
+            json={"text": "\n\n".join(md_snippets), "mode": "gfm"},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        html = resp.text
+        camo_map = {}
+        for u in urls:
+            h = binascii.crc32(u.encode()) & 0xFFFFFFFF
+            camo_base = f"https://camo.githubusercontent.com/{h:x}/"
+            pattern = re.escape(camo_base) + r"[a-f0-9]{40}"
+            found = re.findall(pattern, html)
+            if found:
+                camo_map[u] = found[0]
+        return camo_map
+    except Exception as e:
+        print(f"  build_camo_map_for_urls failed: {e}")
+        return {}
+
+
+def collect_cms_urls(blocks: list[dict]) -> set[str]:
+    urls = set()
+    for b in blocks:
+        img = b.get("image", "")
+        if CMS_ASSETS_PREFIX in img:
+            urls.add(img)
+    return urls
+
+
+def apply_camo_map(blocks: list[dict], camo_map: dict) -> int:
+    replaced = 0
+    for b in blocks:
+        img = b.get("image", "")
+        if img in camo_map:
+            b["image"] = camo_map[img]
+            replaced += 1
+    return replaced
 def sync_article():
     """同步 GitHub 文章"""
     print(f"[{datetime.now(timezone.utc).isoformat()}] 开始同步文章...")
-    
+
+    camo_cache = load_camo_cache()
+    print(f"  已加载 camo_cache: {len(camo_cache)} 条")
+
     try:
-        # 获取 GitHub 内容
-        print("正在从 GitHub 获取内容...")
         with httpx.Client(timeout=30.0) as client:
             response = client.get(GITHUB_URL)
             response.raise_for_status()
             history = fetch_recent_history(client)
             markdown_content = response.text
             parsed = parse_markdown(markdown_content)
+
+            all_cms_urls = collect_cms_urls(parsed["blocks"])
 
             history_versions = []
             for item in history:
@@ -298,6 +396,7 @@ def sync_article():
                 try:
                     version_markdown = fetch_markdown_by_sha(client, sha)
                     parsed_version = parse_markdown(version_markdown)
+                    all_cms_urls.update(collect_cms_urls(parsed_version["blocks"]))
                     history_versions.append(
                         {
                             "sha": sha,
@@ -311,8 +410,39 @@ def sync_article():
                 except Exception:
                     continue
 
+            unresolved = [u for u in all_cms_urls if u not in camo_cache]
+            if unresolved:
+                print(f"  未解析的 cms-assets URL: {len(unresolved)}，从主 README 构建 camo 映射...")
+                new_map = build_camo_url_map(client, markdown_content)
+                camo_cache.update(new_map)
+                unresolved = [u for u in unresolved if u not in camo_cache]
+            if unresolved:
+                print(f"  仍有 {len(unresolved)} 个未解析，批量构建...")
+                new_map = build_camo_map_for_urls(client, unresolved)
+                camo_cache.update(new_map)
+                save_camo_cache(camo_cache)
+
+            replaced_count = apply_camo_map(parsed["blocks"], camo_cache)
+            print(f"  当前版本替换: {replaced_count} 张")
+
+            for hv in history_versions:
+                r = apply_camo_map(hv["blocks"], camo_cache)
+                if r:
+                    print(f"  历史版本 {hv['sha']} 替换: {r} 张")
+
+            remaining = collect_cms_urls(parsed["blocks"])
+            for hv in history_versions:
+                remaining.update(collect_cms_urls(hv["blocks"]))
+            remaining = [u for u in remaining if u not in camo_cache]
+            if remaining:
+                print(f"  警告: 仍有 {len(remaining)} 个未替换的 cms-assets URL")
+                for u in remaining[:5]:
+                    print(f"    {u}")
+
+            save_camo_cache(camo_cache)
+
         update_time = datetime.now(timezone.utc).isoformat()
-        
+
         article = {
             "title": parsed["title"],
             "intro": parsed["intro"],
@@ -323,20 +453,24 @@ def sync_article():
             "recentHistory": history,
             "historyVersions": history_versions,
         }
-        
-        # 保存数据
+
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         with open(ARTICLE_FILE, 'w', encoding='utf-8') as f:
             json.dump(article, f, ensure_ascii=False, indent=2)
-        
+
         print(f"Sync success: {parsed['title']}")
         print(f"  更新时间：{update_time}")
         print(f"  保存位置：{ARTICLE_FILE}")
-        
+
         return True
-        
+
     except httpx.HTTPError as e:
         print(f"✗ GitHub API 请求失败：{e}")
+        return False
+    except Exception as e:
+        print(f"✗ 同步失败：{e}")
+        import traceback
+        traceback.print_exc()
         return False
     except Exception as e:
         print(f"✗ 同步失败：{e}")
