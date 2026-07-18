@@ -41,6 +41,10 @@ jobs:
         run: npm run build
         working-directory: frontend
 
+      - name: Download images for offline export
+        run: node scripts/download-images.mjs
+        working-directory: frontend
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

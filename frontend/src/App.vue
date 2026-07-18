@@ -482,6 +482,7 @@ const showPrevImage = () => {
 
 onMounted(() => {
   fetchArticle()
+  loadImageManifest()
   window.addEventListener('scroll', handleScroll)
 })
 
@@ -714,33 +715,48 @@ const decodeCamoUrl = (url: string): string | null => {
   }
 }
 
-const cacheImageThenFetch = async (url: string): Promise<Blob | null> => {
+const canvasFetchImage = async (url: string): Promise<Blob | null> => {
   return new Promise((resolve) => {
     const img = new Image()
-    img.onload = async () => {
+    img.crossOrigin = 'anonymous'
+    const done = (blob: Blob | null) => { resolve(blob) }
+    img.onload = () => {
       try {
-        const resp = await fetch(url, { cache: 'force-cache' })
-        if (resp.ok) {
-          resolve(await resp.blob())
-          return
-        }
-      } catch {}
-      try {
-        const resp = await fetch(url, { cache: 'only-if-cached' })
-        if (resp.ok) {
-          resolve(await resp.blob())
-          return
-        }
-      } catch {}
-      resolve(null)
+        const canvas = document.createElement('canvas')
+        canvas.width = img.naturalWidth
+        canvas.height = img.naturalHeight
+        const ctx = canvas.getContext('2d')
+        if (!ctx) { done(null); return }
+        ctx.drawImage(img, 0, 0)
+        canvas.toBlob((blob) => done(blob), 'image/png')
+      } catch { done(null) }
     }
-    img.onerror = () => resolve(null)
-    setTimeout(() => resolve(null), 10000)
+    img.onerror = () => done(null)
+    setTimeout(() => done(null), 15000)
     img.src = url
   })
 }
 
+const imageManifest = ref<Record<string, string> | null>(null)
+
+const loadImageManifest = async () => {
+  try {
+    const resp = await fetch(`${import.meta.env.BASE_URL}download-images/manifest.json`)
+    if (resp.ok) {
+      imageManifest.value = await resp.json()
+    }
+  } catch {}
+}
+
 const fetchImage = async (url: string): Promise<Blob | null> => {
+  if (imageManifest.value && imageManifest.value[url]) {
+    const localPath = `${import.meta.env.BASE_URL}download-images/${imageManifest.value[url]}`
+    try {
+      const resp = await fetch(localPath)
+      if (resp.ok) return await resp.blob()
+    } catch {}
+  }
+
   try {
     const resp = await fetch(url)
     if (resp.ok) return await resp.blob()
@@ -748,20 +764,22 @@ const fetchImage = async (url: string): Promise<Blob | null> => {
 
   const decoded = decodeCamoUrl(url)
   if (decoded) {
+    const blob = await canvasFetchImage(decoded)
+    if (blob) return blob
     try {
       const resp = await fetch(decoded)
       if (resp.ok) return await resp.blob()
     } catch {}
   }
 
+  const canvasBlob = await canvasFetchImage(url)
+  if (canvasBlob) return canvasBlob
+
   try {
     const proxyUrl = `/api/proxy-image?url=${encodeURIComponent(url)}`
     const resp = await fetch(proxyUrl)
     if (resp.ok) return await resp.blob()
   } catch {}
-
-  const cached = await cacheImageThenFetch(url)
-  if (cached) return cached
 
   return null
 }
