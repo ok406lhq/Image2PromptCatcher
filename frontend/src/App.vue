@@ -117,8 +117,15 @@
           v-for="(b, bi) in bookmarks"
           :key="`${b.blockIndex}-${b.versionKey}`"
           class="bookmark-item"
+          :class="{ 'bookmark-dragging': dragBookmarkIndex === bi, 'bookmark-drag-over': dragOverBookmarkIndex === bi && dragBookmarkIndex !== bi }"
           type="button"
+          draggable="true"
           @click="handleBookmarkClick(b)"
+          @dragstart="onBookmarkDragStart(bi, $event)"
+          @dragover="onBookmarkDragOver(bi, $event)"
+          @dragleave="dragOverBookmarkIndex = null"
+          @drop="onBookmarkDrop(bi)"
+          @dragend="onBookmarkDragEnd"
         >
           <img class="bookmark-thumb" :src="proxyImageUrl(b.image)" :alt="b.title" loading="lazy" />
           <span class="bookmark-title">{{ b.title }}</span>
@@ -133,6 +140,25 @@
             </svg>
           </button>
         </button>
+      </div>
+      <div class="write-export-area">
+        <button
+          v-if="!isExporting && !exportReady"
+          class="write-btn"
+          type="button"
+          @click="handleExport"
+        >
+          写作
+        </button>
+        <div v-if="isExporting" class="write-progress">
+          <span class="write-progress-text">正在写作处理中...</span>
+          <div class="write-progress-bar"><div class="write-progress-fill"></div></div>
+        </div>
+        <div v-if="exportReady" class="write-actions">
+          <button class="write-dl-btn" type="button" @click="downloadText">文本</button>
+          <button class="write-dl-btn" type="button" @click="downloadZip">图片</button>
+        </div>
+        <p v-if="exportError" class="write-error">{{ exportError }}</p>
       </div>
     </aside>
 
@@ -166,8 +192,14 @@
             v-for="(b, bi) in bookmarks"
             :key="`m-${b.blockIndex}-${b.versionKey}`"
             class="bookmark-item"
+            :class="{ 'bookmark-dragging': dragBookmarkIndex === bi, 'bookmark-drag-over': dragOverBookmarkIndex === bi && dragBookmarkIndex !== bi }"
             type="button"
+            draggable="true"
             @click="bookmarkMobileOpen = false; handleBookmarkClick(b)"
+            @dragstart="onBookmarkDragStart(bi, $event)"
+            @dragover="onBookmarkDragOver(bi, $event)"
+            @drop="onBookmarkDrop(bi)"
+            @dragend="onBookmarkDragEnd"
           >
             <img class="bookmark-thumb" :src="proxyImageUrl(b.image)" :alt="b.title" loading="lazy" />
             <span class="bookmark-title">{{ b.title }}</span>
@@ -239,6 +271,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, onUnmounted, nextTick } from 'vue'
 import axios from 'axios'
+import JSZip from 'jszip'
 
 interface ArticleBlock {
   section: string
@@ -259,6 +292,11 @@ interface BookmarkItem {
   section: string
   blockIndex: number
   versionKey: string
+  description: string
+  xUrl?: string
+  publishedAt?: string
+  author?: string
+  language?: string
 }
 
 interface Article {
@@ -307,6 +345,14 @@ const maxScale = 3
 
 const bookmarks = ref<BookmarkItem[]>([])
 const bookmarkMobileOpen = ref(false)
+const dragBookmarkIndex = ref<number | null>(null)
+const dragOverBookmarkIndex = ref<number | null>(null)
+const isExporting = ref(false)
+const exportReady = ref(false)
+const exportError = ref('')
+const cachedTextBlob = ref<Blob | null>(null)
+const cachedZipBlob = ref<Blob | null>(null)
+const cachedTimestamp = ref('')
 
 const isBookmarked = (index: number, versionKey: string): boolean => {
   return bookmarks.value.some(
@@ -503,6 +549,11 @@ const toggleBookmark = (item: ArticleBlock, index: number) => {
       section: item.section,
       blockIndex: index,
       versionKey: vk,
+      description: item.description || '',
+      xUrl: item.xUrl,
+      publishedAt: item.publishedAt,
+      author: item.author,
+      language: item.language,
     })
   }
 }
@@ -517,6 +568,183 @@ const handleBookmarkClick = async (item: BookmarkItem) => {
   if (cards[item.blockIndex]) {
     cards[item.blockIndex].scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
+}
+
+const onBookmarkDragStart = (index: number, e: DragEvent) => {
+  dragBookmarkIndex.value = index
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+  }
+}
+
+const onBookmarkDragOver = (index: number, e: DragEvent) => {
+  e.preventDefault()
+  dragOverBookmarkIndex.value = index
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = 'move'
+  }
+}
+
+const onBookmarkDrop = (index: number) => {
+  dragOverBookmarkIndex.value = null
+  if (dragBookmarkIndex.value === null || dragBookmarkIndex.value === index) return
+  const items = [...bookmarks.value]
+  const [removed] = items.splice(dragBookmarkIndex.value, 1)
+  items.splice(index, 0, removed)
+  bookmarks.value = items
+  dragBookmarkIndex.value = null
+}
+
+const onBookmarkDragEnd = () => {
+  dragBookmarkIndex.value = null
+  dragOverBookmarkIndex.value = null
+}
+
+const formatTimestamp = (date: Date): string => {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  const h = String(date.getHours()).padStart(2, '0')
+  const min = String(date.getMinutes()).padStart(2, '0')
+  const s = String(date.getSeconds()).padStart(2, '0')
+  return `${y}${m}${d}-${h}${min}${s}`
+}
+
+const downloadBlob = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+const getImageExtension = (mimeType: string, imageUrl: string): string => {
+  const fromUrl = imageUrl.split('.').pop()?.split('?')[0]?.toLowerCase()
+  if (fromUrl && ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif'].includes(fromUrl)) return fromUrl === 'jpeg' ? 'jpg' : fromUrl
+  const mimeMap: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+    'image/avif': 'avif',
+  }
+  return mimeMap[mimeType] || 'png'
+}
+
+const escapeHtml = (text: string): string => {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+const formatPrompt = (text: string): string => {
+  return text.replace(/\{argument\s+name="[^"]+"\s+default="([^"]*)"\}/g, '$1')
+}
+
+const generateHtml = (items: BookmarkItem[], articleTitle: string): string => {
+  const title = escapeHtml(articleTitle || 'GPT Image2 提示词合集')
+  const blocks: string[] = []
+
+  items.forEach((b, i) => {
+    const cleanTitle = b.title.replace(/^No\.\s*\d+:\s*/, '')
+    blocks.push(`<h2>No. ${i + 1}: ${escapeHtml(cleanTitle)}</h2>`)
+
+    if (b.description) {
+      blocks.push(`<h3>\u{1F4D6} 描述</h3>`)
+      blocks.push(`<p>${escapeHtml(b.description)}</p>`)
+    }
+    if (b.prompt) {
+      blocks.push(`<h3>\u{1F4DD} 提示词</h3>`)
+      blocks.push(`<pre>${escapeHtml(formatPrompt(b.prompt))}</pre>`)
+    }
+    blocks.push(`<h3>\u{1F5BC}\uFE0F 生成图片</h3>`)
+    blocks.push('<p></p>')
+    const details: string[] = []
+    if (b.author) details.push(`<p><strong>作者:</strong> ${escapeHtml(b.author)}</p>`)
+    if (b.xUrl) details.push(`<p><strong>来源:</strong> <a href="${escapeHtml(b.xUrl)}" target="_blank" rel="noopener noreferrer">Twitter Post</a></p>`)
+    if (b.publishedAt) details.push(`<p><strong>发布时间:</strong> ${escapeHtml(b.publishedAt)}</p>`)
+    if (b.language) details.push(`<p><strong>多语言:</strong> ${escapeHtml(b.language)}</p>`)
+    if (details.length > 0) {
+      blocks.push(`<h3>\u{1F4CC} 详情</h3>`)
+      blocks.push(...details)
+    }
+    blocks.push('<hr>')
+  })
+
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>${title}</title>
+  <style>
+    body { max-width: 860px; margin: 40px auto; padding: 0 24px 64px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; line-height: 1.8; color: #1f2933; }
+    h1 { font-size: 30px; line-height: 1.35; margin: 0 0 24px; }
+    h2 { font-size: 22px; line-height: 1.45; margin: 36px 0 14px; }
+    h3 { font-size: 18px; line-height: 1.45; margin: 24px 0 8px; }
+    p { margin: 8px 0; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 6px; padding: 14px 16px; line-height: 1.65; font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: 14px; }
+    hr { border: 0; border-top: 1px solid #d8dee4; margin: 32px 0; }
+    a { color: #0969da; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+<h1>${title}</h1>
+
+${blocks.join('\n\n')}
+</body>
+</html>`
+}
+
+const generateZip = async (items: BookmarkItem[]): Promise<Blob> => {
+  const zip = new JSZip()
+
+  for (let i = 0; i < items.length; i++) {
+    try {
+      const proxyUrl = `/api/proxy-image?url=${encodeURIComponent(items[i].image)}`
+      const resp = await fetch(proxyUrl)
+      if (resp.ok) {
+        const blob = await resp.blob()
+        const ext = getImageExtension(blob.type, items[i].image)
+        zip.file(`${i + 1}.${ext}`, blob)
+      }
+    } catch {}
+  }
+
+  return zip.generateAsync({ type: 'blob' })
+}
+
+const handleExport = async () => {
+  if (bookmarks.value.length === 0 || isExporting.value) return
+  isExporting.value = true
+  exportReady.value = false
+  exportError.value = ''
+
+  const items: BookmarkItem[] = bookmarks.value.map(b => ({ ...b }))
+  cachedTimestamp.value = formatTimestamp(new Date())
+
+  try {
+    const htmlContent = generateHtml(items, article.value?.title || '')
+    cachedTextBlob.value = new Blob([htmlContent], { type: 'text/html;charset=utf-8' })
+
+    cachedZipBlob.value = await generateZip(items)
+    exportReady.value = true
+  } catch {
+    exportError.value = '生成失败，请稍后重试'
+  } finally {
+    isExporting.value = false
+  }
+}
+
+const downloadText = () => {
+  if (!cachedTextBlob.value) return
+  downloadBlob(cachedTextBlob.value, `prompts-${cachedTimestamp.value}.html`)
+}
+
+const downloadZip = () => {
+  if (!cachedZipBlob.value) return
+  downloadBlob(cachedZipBlob.value, `images-${cachedTimestamp.value}.zip`)
 }
 
 const historyLabels = computed(() => {
@@ -1137,6 +1365,14 @@ h2 {
   color: #7a4a24;
 }
 
+.bookmark-dragging {
+  opacity: 0.4;
+}
+
+.bookmark-drag-over {
+  border-top: 2px solid #d89c5c;
+}
+
 /* 移动端收藏 */
 .bookmark-mobile-entry {
   position: fixed;
@@ -1248,6 +1484,98 @@ h2 {
   .bookmark-mobile-overlay {
     display: none;
   }
+}
+
+.write-export-area {
+  padding: 8px 14px 12px;
+  border-top: 1px solid #efd4be;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.write-btn {
+  width: 100%;
+  border: 2px solid #d89c5c;
+  background: linear-gradient(135deg, #ffb380, #ff9955);
+  color: #fff;
+  border-radius: 999px;
+  padding: 10px 0;
+  font: 700 14px/1.2 'Trebuchet MS', sans-serif;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 4px 12px rgba(255, 153, 85, 0.35);
+}
+
+.write-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(255, 153, 85, 0.45);
+}
+
+.write-progress {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.write-progress-text {
+  font: 600 12px/1.2 'Trebuchet MS', sans-serif;
+  color: #8b5a2b;
+}
+
+.write-progress-bar {
+  width: 100%;
+  height: 4px;
+  background: #f2dcc4;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.write-progress-fill {
+  height: 100%;
+  width: 30%;
+  background: linear-gradient(90deg, #d89c5c, #ff9955);
+  border-radius: 2px;
+  animation: writeProgress 1.4s ease-in-out infinite;
+}
+
+@keyframes writeProgress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+.write-actions {
+  width: 100%;
+  display: flex;
+  gap: 8px;
+}
+
+.write-dl-btn {
+  flex: 1;
+  border: 2px solid #d89c5c;
+  background: linear-gradient(135deg, #ffb380, #ff9955);
+  color: #fff;
+  border-radius: 999px;
+  padding: 8px 0;
+  font: 700 13px/1.2 'Trebuchet MS', sans-serif;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 4px 12px rgba(255, 153, 85, 0.3);
+}
+
+.write-dl-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(255, 153, 85, 0.4);
+}
+
+.write-error {
+  margin: 0;
+  color: #c0392b;
+  font: 600 12px/1.2 'Trebuchet MS', sans-serif;
 }
 
 @keyframes reveal {

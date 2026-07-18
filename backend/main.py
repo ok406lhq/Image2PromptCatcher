@@ -507,13 +507,19 @@ _CAMO_CACHE: dict[str, str] = {}
 @app.get("/api/proxy-image")
 async def proxy_image(url: str = Query(..., description="要代理的图片 URL")):
     hostname = urlparse(url).hostname
-    if hostname not in ("cms-assets.youmind.com", "marketing-assets.youmind.com"):
+    allowed_hosts = ("cms-assets.youmind.com", "marketing-assets.youmind.com", "camo.githubusercontent.com")
+    if hostname not in allowed_hosts:
         raise HTTPException(status_code=403, detail="不允许代理该域名的图片")
 
-    if url not in _CAMO_CACHE:
-        _CAMO_CACHE[url] = resolve_camo_url(url)
+    is_already_camo = hostname == "camo.githubusercontent.com"
 
-    camo_url = _CAMO_CACHE[url]
+    if is_already_camo:
+        camo_url = url
+    elif url not in _CAMO_CACHE:
+        _CAMO_CACHE[url] = resolve_camo_url(url)
+        camo_url = _CAMO_CACHE[url]
+    else:
+        camo_url = _CAMO_CACHE[url]
 
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:

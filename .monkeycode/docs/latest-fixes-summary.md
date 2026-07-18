@@ -156,3 +156,35 @@
 - 定时抓取可自动驱动网页更新
 - 来源链接可以稳定写入并在前端展示
 - 页面交互满足最新展示规范
+
+---
+
+## 2026-07-18 写作导出与拖拽排序功能
+
+### 新增功能
+
+#### 1. 写作导出
+- 右侧收藏面板底部新增"写作"按钮，点击后显示进度条
+- 生成完成后显示"文本"和"图片"两个独立下载按钮
+- 文本输出为 HTML 格式：参照预设模板排版，内嵌 CSS，按收藏顺序逐条输出卡片信息（序号、章节标题、描述、提示词、生成图片占位区、详情）
+- 图片输出为 ZIP 压缩包：图片通过 `/api/proxy-image` 代理获取，按收藏顺序重命名为 1.png / 2.jpg 等
+- prompt 内容自动格式化：`{argument name="xxx" default="yyy"}` → `yyy`
+
+#### 2. 拖拽排序
+- 收藏列表支持鼠标拖拽重排（桌面端面板和移动端抽屉均支持）
+- 拖拽时被拖项半透明，目标位置显示橙色引导线
+- 基于 HTML5 Drag & Drop API，纯前端实现
+
+### 后端改动
+- `backend/main.py`: 图片代理白名单新增 `camo.githubusercontent.com`，解决 Camo 图片防盗链导致压缩包为空的问题
+
+### 前端改动
+- `App.vue`: 新增 `generateHtml`、`escapeHtml`、`formatPrompt`、`generateZip`、`handleExport`、`downloadText`、`downloadZip` 函数
+- `App.vue`: 新增拖拽排序处理函数 `onBookmarkDragStart` / `onBookmarkDragOver` / `onBookmarkDrop` / `onBookmarkDragEnd`
+- `App.vue`: 写作按钮 UI（进度条 + 分步下载按钮）
+- `App.vue`: `BookmarkItem` 接口扩展 description/xUrl/publishedAt/author/language 字段
+- `package.json`: 新增 `jszip` 依赖
+
+### 相关规格文档
+- `.monkeycode/specs/writing-export/requirements.md`
+- `.monkeycode/specs/writing-export/design.md`
