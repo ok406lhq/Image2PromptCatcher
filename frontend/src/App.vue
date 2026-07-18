@@ -697,19 +697,45 @@ ${blocks.join('\n\n')}
 </html>`
 }
 
-const generateZip = async (items: BookmarkItem[]): Promise<Blob> => {
+const fetchImage = async (url: string): Promise<Blob | null> => {
+  try {
+    const resp = await fetch(url)
+    if (resp.ok) return await resp.blob()
+  } catch {}
+  try {
+    const proxyUrl = `/api/proxy-image?url=${encodeURIComponent(url)}`
+    const resp = await fetch(proxyUrl)
+    if (resp.ok) return await resp.blob()
+  } catch {}
+  return null
+}
+
+const getSiblingImages = (bookmark: BookmarkItem): string[] => {
+  const blocks = visibleBlocks.value
+  const images: string[] = []
+  for (const block of blocks) {
+    if (block.title === bookmark.title && block.image) {
+      images.push(block.image)
+    }
+  }
+  return images
+}
+
+const generateZip = async (groups: string[][]): Promise<Blob> => {
   const zip = new JSZip()
 
-  for (let i = 0; i < items.length; i++) {
-    try {
-      const proxyUrl = `/api/proxy-image?url=${encodeURIComponent(items[i].image)}`
-      const resp = await fetch(proxyUrl)
-      if (resp.ok) {
-        const blob = await resp.blob()
-        const ext = getImageExtension(blob.type, items[i].image)
-        zip.file(`${i + 1}.${ext}`, blob)
+  for (let gi = 0; gi < groups.length; gi++) {
+    const images = groups[gi]
+    for (let ii = 0; ii < images.length; ii++) {
+      const blob = await fetchImage(images[ii])
+      if (blob) {
+        const ext = getImageExtension(blob.type, images[ii])
+        const name = images.length > 1
+          ? `${gi + 1}(${ii + 1}).${ext}`
+          : `${gi + 1}.${ext}`
+        zip.file(name, blob)
       }
-    } catch {}
+    }
   }
 
   return zip.generateAsync({ type: 'blob' })
@@ -722,13 +748,14 @@ const handleExport = async () => {
   exportError.value = ''
 
   const items: BookmarkItem[] = bookmarks.value.map(b => ({ ...b }))
+  const imageGroups: string[][] = items.map(b => getSiblingImages(b))
   cachedTimestamp.value = formatTimestamp(new Date())
 
   try {
     const htmlContent = generateHtml(items, article.value?.title || '')
     cachedTextBlob.value = new Blob([htmlContent], { type: 'text/html;charset=utf-8' })
 
-    cachedZipBlob.value = await generateZip(items)
+    cachedZipBlob.value = await generateZip(imageGroups)
     exportReady.value = true
   } catch {
     exportError.value = '生成失败，请稍后重试'

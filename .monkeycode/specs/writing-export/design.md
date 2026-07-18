@@ -132,24 +132,48 @@ const formatPrompt = (text: string): string => {
 
 ### 6. 压缩包生成 (`generateZip`)
 
-所有图片统一通过 `/api/proxy-image?url=...` 代理获取。后端代理白名单已扩展支持 `camo.githubusercontent.com`。
+图片下载策略：优先直接 fetch 原图 URL（GitHub Pages 环境下 Camo URL 可直接访问），失败时 fallback 到 `/api/proxy-image` 代理。
+
+压缩包文件命名规则：
+- 单图收藏项：`1.png`、`2.jpg`
+- 多图收藏项（同标题多张变体）：`1(1).png`、`1(2).png`、`1(3).png`、`1(4).png`
 
 ```typescript
-const generateZip = async (items: BookmarkItem[]): Promise<Blob> => {
+const fetchImage = async (url: string): Promise<Blob | null> => {
+  // 先尝试直接 fetch（生产环境 Camo URL 可直连）
+  const resp = await fetch(url)
+  if (resp.ok) return await resp.blob()
+  // fallback 到代理
+  const proxyUrl = `/api/proxy-image?url=${encodeURIComponent(url)}`
+  const resp2 = await fetch(proxyUrl)
+  if (resp2.ok) return await resp2.blob()
+  return null
+}
+
+const getSiblingImages = (bookmark: BookmarkItem): string[] => {
+  // 在同版本 visibleBlocks 中查找所有同标题的 block，收集全部图片 URL
+  return visibleBlocks.value
+    .filter(b => b.title === bookmark.title && b.image)
+    .map(b => b.image)
+}
+
+const generateZip = async (groups: string[][]): Promise<Blob> => {
   const zip = new JSZip()
-  for (let i = 0; i < items.length; i++) {
-    const proxyUrl = `/api/proxy-image?url=${encodeURIComponent(items[i].image)}`
-    const resp = await fetch(proxyUrl)
-    if (resp.ok) {
-      const blob = await resp.blob()
-      zip.file(`${i + 1}.${ext}`, blob)
+  for (let gi = 0; gi < groups.length; gi++) {
+    for (let ii = 0; ii < groups[gi].length; ii++) {
+      const blob = await fetchImage(groups[gi][ii])
+      if (blob) {
+        const ext = getImageExtension(blob.type, groups[gi][ii])
+        const name = groups[gi].length > 1
+          ? `${gi + 1}(${ii + 1}).${ext}`
+          : `${gi + 1}.${ext}`
+        zip.file(name, blob)
+      }
     }
   }
   return zip.generateAsync({ type: 'blob' })
 }
 ```
-
-图片扩展名优先从原始 URL 提取，回退到 MIME type 映射。
 
 ### 7. 后端代理修改
 
@@ -197,7 +221,8 @@ const dragOverBookmarkIndex = ref<number | null>(null) // 悬停目标索引
 3. **图片容错**: 单张图片 fetch 失败不影响其他图片
 4. **HTML 安全**: 所有用户内容经 `escapeHtml` 转义
 5. **拖拽去重**: `dragIndex === dropIndex` 时跳过操作
-6. **纯前端实现**: 不涉及后端新增接口，仅扩展现有代理白名单
+6. **多图完整性**: 同一标题下所有变体图片自动聚合，确保收藏一项即获得全部关联图片
+7. **纯前端实现**: 不涉及后端新增接口，仅扩展现有代理白名单
 
 ## Error Handling
 
@@ -213,8 +238,9 @@ const dragOverBookmarkIndex = ref<number | null>(null) // 悬停目标索引
 
 - `frontend/src/App.vue` — 全部组件逻辑
 - `frontend/src/App.vue#L592-646` — `generateHtml` 和 `formatPrompt`
-- `frontend/src/App.vue#L649-671` — `generateZip`
-- `frontend/src/App.vue#L673-712` — `handleExport` 和下载函数
+- `frontend/src/App.vue#L700-710` — `fetchImage` 和 `getSiblingImages`
+- `frontend/src/App.vue#L712-733` — `generateZip`
+- `frontend/src/App.vue#L735-756` — `handleExport` 和下载函数
 - `frontend/src/App.vue#L558-596` — 拖拽排序处理函数
 - `backend/main.py#L507-535` — 图片代理端点
 - `frontend/vite.config.ts` — API 反向代理配置
@@ -229,3 +255,6 @@ const dragOverBookmarkIndex = ref<number | null>(null) // 悬停目标索引
 | 2026-07-18 | 后端代理白名单扩展 `camo.githubusercontent.com` |
 | 2026-07-18 | 新增拖拽排序功能（HTML5 Drag & Drop） |
 | 2026-07-18 | BookmarkItem 扩展 description/xUrl/publishedAt/author/language 字段 |
+| 2026-07-18 | `fetchImage` 改为优先直连 Camo URL（适配 GitHub Pages 生产环境），失败 fallback 代理 |
+| 2026-07-18 | 新增 `getSiblingImages`：收藏一项自动包含同标题所有变体图片，命名 `1(1)`, `1(2)` 格式 |
+| 2026-07-18 | `generateZip` 签名改为 `(groups: string[][])` 支持多图分组 |

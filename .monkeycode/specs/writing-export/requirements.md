@@ -52,14 +52,15 @@
 
 ### Requirement 4: 图片压缩包生成
 
-**User Story:** AS 内容浏览用户，I want 点击"图片"按钮下载一个包含收藏卡片原始图片的压缩包，so that 我可以批量下载图片原图
+**User Story:** AS 内容浏览用户，I want 点击"图片"按钮下载一个包含收藏卡片所有变体原图的压缩包，so that 我可以批量下载全部关联图片原图
 
 #### Acceptance Criteria
 
 1. WHEN 用户点击"图片"按钮，系统 SHALL 下载一个 ZIP 压缩包
-2. WHILE 生成压缩包，系统 SHALL 按收藏列表的顺序将所有卡片的图片通过 `/api/proxy-image` 代理获取并添加到压缩包中
-3. WHILE 生成压缩包，系统 SHALL 将图片重命名为数字序号 + 原始文件扩展名格式（如 1.png, 2.jpg）
-4. WHERE 代理支持，后端代理 SHALL 接受 `camo.githubusercontent.com` 域名以正确获取图片
+2. WHILE 生成压缩包，系统 SHALL 为每个收藏项查找当前版本中所有同标题的 block，收集全部 image URL
+3. WHILE 生成压缩包，系统 SHALL 优先直接 fetch 原图 URL（适配 GitHub Pages 生产环境），失败时 fallback 代理获取
+4. WHERE 命名规则：单图收藏项为 `1.png`，多图收藏项为 `1(1).png`、`1(2).png`、`1(3).png`、`1(4).png`
+5. WHEN 压缩包生成完毕，系统 SHALL 触发浏览器下载，文件名格式为 `images-YYYYMMDD-HHmmss.zip`
 
 ### Requirement 5: 收藏列表拖拽排序
 

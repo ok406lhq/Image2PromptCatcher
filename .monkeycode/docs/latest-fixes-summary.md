@@ -188,3 +188,23 @@
 ### 相关规格文档
 - `.monkeycode/specs/writing-export/requirements.md`
 - `.monkeycode/specs/writing-export/design.md`
+
+---
+
+## 2026-07-18 GitHub Pages 图片下载修复 + 同标题多图聚合
+
+### 修复
+
+#### 1. GitHub Pages 生产环境图片下载修复
+- `fetchImage` 改为优先直连原图 URL（GitHub Pages 环境下 Camo URL 可被 fetch 访问），失败时 fallback 到 `/api/proxy-image` 代理
+- 此前仅使用代理路径，部署到静态托管后因无后端服务而全部失败
+
+#### 2. 同标题多图聚合
+- 新增 `getSiblingImages` 函数：收藏一项时自动查找当前版本中所有同标题 block，收集全部变体图片
+- 压缩包命名：单图 `1.png`，多图 `1(1).png` / `1(2).png` / `1(3).png` / `1(4).png`
+- 例如收藏"柔和色调猫耳动漫少女"（同标题下 Image 1~4），压缩包包含 4 张图片
+
+### 前端改动
+- `App.vue`: 新增 `fetchImage`、`getSiblingImages` 函数
+- `App.vue`: `generateZip` 签名改为 `(groups: string[][])` 支持分组
+- `App.vue`: `handleExport` 中调用 `getSiblingImages` 构建图片组
