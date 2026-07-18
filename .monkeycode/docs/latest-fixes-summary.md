@@ -208,3 +208,23 @@
 - `App.vue`: 新增 `fetchImage`、`getSiblingImages` 函数
 - `App.vue`: `generateZip` 签名改为 `(groups: string[][])` 支持分组
 - `App.vue`: `handleExport` 中调用 `getSiblingImages` 构建图片组
+
+---
+
+## 2026-07-18 GitHub Pages 图片下载深度修复
+
+### 问题
+`fetch()` 到 `camo.githubusercontent.com` 返回 403，因为浏览器对 `fetch()` 发送 `Sec-Fetch-Dest: empty`，而 GitHub Camo 要求 `Sec-Fetch-Dest: image`（仅 `<img>` 标签能满足）。
+
+### 修复
+`fetchImage` 改为四级降级策略：
+
+1. **直接 fetch** — 优先尝试（同一域名或允许 CORS 的源可成功）
+2. **解码 Camo URL → fetch 原始 CDN URL** — 新增 `decodeCamoUrl`：从 `camo.githubusercontent.com/HASH/HEX` 中解码出原始图片 URL（如 `cms-assets.youmind.com/...`），从源站直接获取
+3. **代理** — 本地开发环境通过 `/api/proxy-image` 获取
+4. **缓存预热 fetch** — 新增 `cacheImageThenFetch`：先用 `<img>` 标签加载图片到浏览器缓存（绕过 Sec-Fetch-Dest 限制），再通过 `fetch(url, { cache: 'force-cache' })` 从缓存读取，从而绕过 CORS 检查
+
+### 前端改动
+- `App.vue`: 新增 `decodeCamoUrl` 函数（Camo URL hex 解码）
+- `App.vue`: 新增 `cacheImageThenFetch` 函数（img 预热 + 缓存 fetch）
+- `App.vue`: `fetchImage` 改为四级降级策略

@@ -697,16 +697,72 @@ ${blocks.join('\n\n')}
 </html>`
 }
 
+const decodeCamoUrl = (url: string): string | null => {
+  try {
+    const u = new URL(url)
+    if (u.hostname !== 'camo.githubusercontent.com') return null
+    const pathParts = u.pathname.split('/').filter(Boolean)
+    if (pathParts.length < 2) return null
+    const hexData = pathParts[1]
+    const bytes = new Uint8Array(hexData.length / 2)
+    for (let i = 0; i < hexData.length; i += 2) {
+      bytes[i / 2] = parseInt(hexData.substring(i, i + 2), 16)
+    }
+    return new TextDecoder().decode(bytes)
+  } catch {
+    return null
+  }
+}
+
+const cacheImageThenFetch = async (url: string): Promise<Blob | null> => {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = async () => {
+      try {
+        const resp = await fetch(url, { cache: 'force-cache' })
+        if (resp.ok) {
+          resolve(await resp.blob())
+          return
+        }
+      } catch {}
+      try {
+        const resp = await fetch(url, { cache: 'only-if-cached' })
+        if (resp.ok) {
+          resolve(await resp.blob())
+          return
+        }
+      } catch {}
+      resolve(null)
+    }
+    img.onerror = () => resolve(null)
+    setTimeout(() => resolve(null), 10000)
+    img.src = url
+  })
+}
+
 const fetchImage = async (url: string): Promise<Blob | null> => {
   try {
     const resp = await fetch(url)
     if (resp.ok) return await resp.blob()
   } catch {}
+
+  const decoded = decodeCamoUrl(url)
+  if (decoded) {
+    try {
+      const resp = await fetch(decoded)
+      if (resp.ok) return await resp.blob()
+    } catch {}
+  }
+
   try {
     const proxyUrl = `/api/proxy-image?url=${encodeURIComponent(url)}`
     const resp = await fetch(proxyUrl)
     if (resp.ok) return await resp.blob()
   } catch {}
+
+  const cached = await cacheImageThenFetch(url)
+  if (cached) return cached
+
   return null
 }
 

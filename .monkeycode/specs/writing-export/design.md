@@ -132,7 +132,26 @@ const formatPrompt = (text: string): string => {
 
 ### 6. 压缩包生成 (`generateZip`)
 
-图片下载策略：优先直接 fetch 原图 URL（GitHub Pages 环境下 Camo URL 可直接访问），失败时 fallback 到 `/api/proxy-image` 代理。
+图片下载采用四级降级策略：
+
+1. **直接 fetch** — 优先尝试目标 URL（同一域名或允许 CORS 的源）
+2. **Camo URL 解码 fetch** — `decodeCamoUrl` 从 Camo URL hex 部分解码出原始 CDN 地址并直接获取
+3. **代理** — `/api/proxy-image`（本地开发环境）
+4. **缓存预热 fetch** — `cacheImageThenFetch`：用 `<img>` 标签加载到浏览器缓存，再通过 `fetch(url, { cache: 'force-cache' })` 从缓存读取（绕过 `Sec-Fetch-Dest` 检查）
+
+```typescript
+const decodeCamoUrl = (url: string): string | null => {
+  // 从 camo.githubusercontent.com/HASH/HEX_DATA 路径中解码原始 URL
+  const hexData = url.split('/').filter(Boolean).at(-1)
+  // hex → bytes → UTF-8 string
+}
+
+const cacheImageThenFetch = async (url: string): Promise<Blob | null> => {
+  // 1. 创建 <img> 标签加载图片（发送 Sec-Fetch-Dest: image，Camo 允许）
+  // 2. onload 后用 fetch(url, { cache: 'force-cache' }) 从缓存读取
+  //    （缓存响应可能跳过 CORS 检查）
+}
+```
 
 压缩包文件命名规则：
 - 单图收藏项：`1.png`、`2.jpg`
@@ -258,3 +277,5 @@ const dragOverBookmarkIndex = ref<number | null>(null) // 悬停目标索引
 | 2026-07-18 | `fetchImage` 改为优先直连 Camo URL（适配 GitHub Pages 生产环境），失败 fallback 代理 |
 | 2026-07-18 | 新增 `getSiblingImages`：收藏一项自动包含同标题所有变体图片，命名 `1(1)`, `1(2)` 格式 |
 | 2026-07-18 | `generateZip` 签名改为 `(groups: string[][])` 支持多图分组 |
+| 2026-07-18 | 新增 `decodeCamoUrl`：Camo URL hex 解码提取原始 CDN 地址 |
+| 2026-07-18 | 新增 `cacheImageThenFetch`：img 预热缓存 + fetch 从缓存读取，绕过 Sec-Fetch-Dest 限制 |
